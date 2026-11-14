@@ -1,12 +1,13 @@
 import type { User } from 'firebase/auth';
-import { LogOut, MailCheck, Save, X } from 'lucide-react';
+import { LogOut, MailCheck, Save, ShieldCheck, X } from 'lucide-react';
 import React, { useState } from 'react';
 import { resendVerificationEmail } from '../firebase';
 import { updateUserProfileContact } from '../services/firestoreService';
 import type { UserProfile } from '../types';
 
 interface AccountModalProps {
-  user: User;
+  user: User | null;
+  adminEmail: string | null;
   profile: UserProfile | null;
   isAdmin: boolean;
   onClose: () => void;
@@ -16,6 +17,7 @@ interface AccountModalProps {
 
 export const AccountModal: React.FC<AccountModalProps> = ({
   user,
+  adminEmail,
   profile,
   isAdmin,
   onClose,
@@ -23,7 +25,7 @@ export const AccountModal: React.FC<AccountModalProps> = ({
   onProfileSaved,
 }) => {
   const [displayName, setDisplayName] = useState(
-    profile?.displayName || user.displayName || ''
+    profile?.displayName || user?.displayName || 'SACCO Administrator'
   );
   const [phone, setPhone] = useState(profile?.phone || '');
   const [preferredStage, setPreferredStage] = useState(
@@ -35,6 +37,7 @@ export const AccountModal: React.FC<AccountModalProps> = ({
 
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!user) return;
     setSaving(true);
     setSavedNotice(false);
     try {
@@ -63,6 +66,63 @@ export const AccountModal: React.FC<AccountModalProps> = ({
     await resendVerificationEmail().catch(() => {});
     setVerificationSent(true);
   };
+
+  if (!user && adminEmail) {
+    return (
+      <div
+        className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="account-modal-title"
+      >
+        <div className="bg-white border border-slate-200 rounded-xl w-full max-w-md overflow-hidden shadow-xl">
+          <div className="px-6 py-4 border-b border-slate-200 flex items-center justify-between">
+            <div>
+              <h2 id="account-modal-title" className="font-display text-lg font-bold text-slate-900">
+                Administrator Session
+              </h2>
+              <p className="text-xs text-slate-500">{adminEmail} · SACCO Administrator</p>
+            </div>
+            <button
+              type="button"
+              onClick={onClose}
+              className="p-1.5 text-slate-500 hover:text-slate-900 rounded-lg hover:bg-slate-100"
+              aria-label="Close account profile"
+            >
+              <X className="w-5 h-5" />
+            </button>
+          </div>
+          <div className="p-6 space-y-4">
+            <div className="p-4 bg-emerald-50 border border-emerald-200 rounded-lg text-xs text-emerald-950 flex items-start gap-2.5">
+              <ShieldCheck className="w-4 h-4 text-emerald-700 shrink-0 mt-0.5" />
+              <div className="space-y-1">
+                <p className="font-semibold">Exclusive Admin Access Active</p>
+                <p>
+                  You are authenticated as <span className="font-mono">{adminEmail}</span>. Only
+                  this account can view and manage the Admin section.
+                </p>
+              </div>
+            </div>
+            <div className="flex justify-end">
+              <button
+                type="button"
+                onClick={async () => {
+                  await onSignOut();
+                  onClose();
+                }}
+                className="px-4 py-2 text-xs font-medium text-red-700 hover:bg-red-50 border border-red-200 rounded-lg inline-flex items-center gap-1.5"
+              >
+                <LogOut className="w-3.5 h-3.5" />
+                Sign Out
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (!user) return null;
 
   return (
     <div

@@ -7,17 +7,20 @@ import {
   signInWithGoogle,
   signUpWithEmail,
 } from '../firebase';
+import { ADMIN_EMAIL } from '../services/firestoreService';
 
 interface AuthModalProps {
   initialMode?: 'signin' | 'signup';
   onClose: () => void;
   onAuthenticated: () => void;
+  onAdminAuthenticated?: (email: string) => void;
 }
 
 export const AuthModal: React.FC<AuthModalProps> = ({
   initialMode = 'signin',
   onClose,
   onAuthenticated,
+  onAdminAuthenticated,
 }) => {
   const [mode, setMode] = useState<'signin' | 'signup'>(initialMode);
   const [fullName, setFullName] = useState('');
@@ -49,17 +52,54 @@ export const AuthModal: React.FC<AuthModalProps> = ({
     setBusy(true);
     setErrorMsg(null);
     setShowConsoleGuide(false);
+    const normalizedEmail = email.trim().toLowerCase();
+
     try {
       if (mode === 'signup') {
+        if (normalizedEmail === ADMIN_EMAIL) {
+          setErrorMsg(
+            'This email is reserved for the SACCO Administrator. Switch to Sign In and use your master password or Continue with Google.'
+          );
+          setBusy(false);
+          return;
+        }
         if (fullName.trim().length < 2) {
           setErrorMsg('Enter your full name to create an account.');
           setBusy(false);
           return;
         }
         await signUpWithEmail(fullName, email, password);
-      } else {
-        await signInWithEmail(email, password);
+        onAuthenticated();
+        onClose();
+        return;
       }
+
+      if (normalizedEmail === ADMIN_EMAIL) {
+        const res = await fetch('/api/admin/login', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'include',
+          body: JSON.stringify({ email: normalizedEmail, password }),
+        });
+        const data = (await res.json().catch(() => ({}))) as {
+          authenticated?: boolean;
+          email?: string;
+          error?: string;
+        };
+        if (!res.ok || !data.authenticated) {
+          setErrorMsg(data.error || 'Invalid master password for admin account.');
+          setBusy(false);
+          return;
+        }
+        onAdminAuthenticated?.(data.email || ADMIN_EMAIL);
+        // Attempt Firebase email sync quietly if enabled, without failing admin sign-in
+        signInWithEmail(normalizedEmail, password).catch(() => {});
+        onAuthenticated();
+        onClose();
+        return;
+      }
+
+      await signInWithEmail(email, password);
       onAuthenticated();
       onClose();
     } catch (err) {

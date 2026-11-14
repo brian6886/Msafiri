@@ -26,6 +26,12 @@ const DATA_DIR = path.resolve(process.cwd(), 'data');
 const DB_FILE = path.join(DATA_DIR, 'msafiri_server_db.json');
 const TICKET_SIGNING_SECRET = process.env.TICKET_SECRET || 'msafiri-ke-psv-hmac-2026-key';
 const DEFAULT_SETTLEMENT_PHONE = '254112898591';
+const ADMIN_EMAIL = 'khaneribrian@gmail.com';
+const ADMIN_PASSWORD_SALT = 'msafiri_admin_salt_2026';
+const ADMIN_PASSWORD_SCRYPT_HEX =
+  '88dc3c3f0fd515fef2fc390a1faf6c0d743e9b953839a575b611a83890b47e46b304b2d6af9169f66120c1211c027aedc7afd1889b64d1088e3fc565a50e2b63';
+const ADMIN_COOKIE_NAME = 'msafiri_admin_session';
+const ADMIN_SESSION_SECRET = process.env.ADMIN_SESSION_SECRET || TICKET_SIGNING_SECRET;
 
 interface StoredMpesaTx extends MpesaStkResponse {
   createdAtMs: number;
@@ -36,6 +42,7 @@ interface StoredMpesaTx extends MpesaStkResponse {
 
 interface ServerDb {
   trips: Trip[];
+  vehicles?: typeof KENYA_VEHICLES;
   bookings: Booking[];
   parcels: Parcel[];
   mpesaTransactions: Record<string, StoredMpesaTx>;
@@ -49,6 +56,7 @@ function ensureDb(): ServerDb {
   if (!fs.existsSync(DB_FILE)) {
     const initial: ServerDb = {
       trips: buildSeedTrips(),
+      vehicles: [...KENYA_VEHICLES],
       bookings: [],
       parcels: [],
       mpesaTransactions: {},
@@ -63,6 +71,9 @@ function ensureDb(): ServerDb {
     if (!Array.isArray(parsed.trips) || parsed.trips.length === 0) {
       parsed.trips = buildSeedTrips();
     }
+    if (!Array.isArray(parsed.vehicles) || parsed.vehicles.length === 0) {
+      parsed.vehicles = [...KENYA_VEHICLES];
+    }
     parsed.bookings = parsed.bookings || [];
     parsed.parcels = parsed.parcels || [];
     parsed.mpesaTransactions = parsed.mpesaTransactions || {};
@@ -71,6 +82,7 @@ function ensureDb(): ServerDb {
   } catch {
     const fallback: ServerDb = {
       trips: buildSeedTrips(),
+      vehicles: [...KENYA_VEHICLES],
       bookings: [],
       parcels: [],
       mpesaTransactions: {},
@@ -275,6 +287,109 @@ function signTicketPayload(payload: {
   return `MSF1.${hmac.slice(0, 32).toUpperCase()}`;
 }
 
+function parseCookies(cookieHeader: string | undefined): Record<string, string> {
+  const out: Record<string, string> = {};
+  if (!cookieHeader) return out;
+  for (const part of cookieHeader.split(';')) {
+    const idx = part.indexOf('=');
+    if (idx === -1) continue;
+    const key = part.slice(0, idx).trim();
+    const val = part.slice(idx + 1).trim();
+    if (!key) continue;
+    try {
+      out[key] = decodeURIComponent(val);
+    } catch {
+      out[key] = val;
+    }
+  }
+  return out;
+}
+
+function verifyAdminPassword(password: string): boolean {
+  const envOverride = (process.env.ADMIN_MASTER_PASSWORD || '').trim();
+  if (envOverride) {
+    const a = Buffer.from(password, 'utf8');
+    const b = Buffer.from(envOverride, 'utf8');
+    return a.length === b.length && crypto.timingSafeEqual(a, b);
+  }
+  const derived = crypto.scryptSync(password, ADMIN_PASSWORD_SALT, 64);
+  const expected = Buffer.from(ADMIN_PASSWORD_SCRYPT_HEX, 'hex');
+  return derived.length === expected.length && crypto.timingSafeEqual(derived, expected);
+}
+
+function createAdminSessionToken(email: string): string {
+  const payload = Buffer.from(
+    JSON.stringify({
+      email,
+      exp: Date.now() + 7 * 24 * 60 * 60 * 1000,
+    }),
+    'utf8'
+  ).toString('base64url');
+  const sig = crypto
+    .createHmac('sha256', ADMIN_SESSION_SECRET)
+    .update(payload)
+    .digest('base64url');
+  return `${payload}.${sig}`;
+}
+
+function verifyAdminSessionToken(token: string | undefined): string | null {
+  if (!token) return null;
+  const parts = token.split('.');
+  if (parts.length !== 2) return null;
+  const [payloadB64, sigB64] = parts;
+  if (!payloadB64 || !sigB64) return null;
+
+  const expectedSig = crypto
+    .createHmac('sha256', ADMIN_SESSION_SECRET)
+    .update(payloadB64)
+    .digest('base64url');
+
+  const sigBuf = Buffer.from(sigB64, 'utf8');
+  const expBuf = Buffer.from(expectedSig, 'utf8');
+  if (sigBuf.length !== expBuf.length || !crypto.timingSafeEqual(sigBuf, expBuf)) {
+    return null;
+  }
+
+  try {
+    const parsed = JSON.parse(Buffer.from(payloadB64, 'base64url').toString('utf8')) as {
+      email?: string;
+      exp?: number;
+    };
+    if (!parsed.exp || parsed.exp <= Date.now()) return null;
+    if (parsed.email !== ADMIN_EMAIL) return null;
+    return parsed.email;
+  } catch {
+    return null;
+  }
+}
+
+function getAdminSessionEmail(req: express.Request): string | null {
+  const cookies = parseCookies(req.headers.cookie);
+  return verifyAdminSessionToken(cookies[ADMIN_COOKIE_NAME]);
+}
+
+function buildAdminCookieHeader(req: express.Request, value: string, maxAgeSeconds: number): string {
+  const isHttps =
+    req.secure ||
+    req.get('x-forwarded-proto') === 'https' ||
+    (process.env.APP_URL || '').startsWith('https://');
+  const sameSite = isHttps ? 'SameSite=None; Secure' : 'SameSite=Lax';
+  return `${ADMIN_COOKIE_NAME}=${encodeURIComponent(value)}; HttpOnly; Path=/; Max-Age=${maxAgeSeconds}; ${sameSite}`;
+}
+
+function requireAdminSession(
+  req: express.Request,
+  res: express.Response,
+  next: express.NextFunction
+): void {
+  const email = getAdminSessionEmail(req);
+  if (email !== ADMIN_EMAIL) {
+    res.status(401).json({ error: 'Administrator session required.' });
+    return;
+  }
+  next();
+}
+
 async function startServer() {
   const app = express();
   app.set('trust proxy', true);
@@ -311,11 +426,135 @@ async function startServer() {
     });
   });
 
+  app.post('/api/admin/login', (req, res) => {
+    const { email, password } = req.body as { email?: string; password?: string };
+    const normalizedEmail = String(email || '').trim().toLowerCase();
+    if (normalizedEmail !== ADMIN_EMAIL) {
+      res.status(403).json({ error: 'Only the authorized administrator email can access Admin.' });
+      return;
+    }
+    if (!password || !verifyAdminPassword(String(password))) {
+      res.status(401).json({ error: 'Invalid master password for admin account.' });
+      return;
+    }
+    const token = createAdminSessionToken(ADMIN_EMAIL);
+    res.setHeader('Set-Cookie', buildAdminCookieHeader(req, token, 7 * 24 * 60 * 60));
+    res.json({ authenticated: true, email: ADMIN_EMAIL });
+  });
+
+  app.get('/api/admin/session', (req, res) => {
+    const email = getAdminSessionEmail(req);
+    res.json({ authenticated: email === ADMIN_EMAIL, email });
+  });
+
+  app.post('/api/admin/logout', (req, res) => {
+    res.setHeader('Set-Cookie', buildAdminCookieHeader(req, '', 0));
+    res.json({ ok: true });
+  });
+
+  app.get('/api/admin/overview', requireAdminSession, (_req, res) => {
+    const db = ensureDb();
+    res.json({
+      trips: db.trips,
+      vehicles: db.vehicles || KENYA_VEHICLES,
+      bookings: db.bookings,
+      parcels: db.parcels,
+    });
+  });
+
+  app.post('/api/admin/trips', requireAdminSession, (req, res) => {
+    const trip = req.body as Trip;
+    if (!trip?.id || !trip?.origin || !trip?.destination || !trip?.plateNumber) {
+      res.status(400).json({ error: 'Incomplete trip dispatch fields.' });
+      return;
+    }
+    const db = ensureDb();
+    const idx = db.trips.findIndex((t) => t.id === trip.id);
+    if (idx === -1) db.trips.unshift(trip);
+    else db.trips[idx] = trip;
+    saveDb(db);
+    res.json({ trip });
+  });
+
+  app.patch('/api/admin/trips/:id/status', requireAdminSession, (req, res) => {
+    const { id } = req.params;
+    const { status } = req.body as { status?: Trip['status'] };
+    if (!status) {
+      res.status(400).json({ error: 'Trip status is required.' });
+      return;
+    }
+    const db = ensureDb();
+    const idx = db.trips.findIndex((t) => t.id === id);
+    if (idx === -1) {
+      res.status(404).json({ error: 'Trip not found.' });
+      return;
+    }
+    db.trips[idx] = { ...db.trips[idx], status };
+    saveDb(db);
+    res.json({ trip: db.trips[idx] });
+  });
+
+  app.patch('/api/admin/bookings/:id/status', requireAdminSession, (req, res) => {
+    const { id } = req.params;
+    const { status } = req.body as { status?: Booking['status'] };
+    if (!status) {
+      res.status(400).json({ error: 'Booking status is required.' });
+      return;
+    }
+    const db = ensureDb();
+    const idx = db.bookings.findIndex((b) => b.id === id);
+    if (idx === -1) {
+      res.status(404).json({ error: 'Booking not found.' });
+      return;
+    }
+    db.bookings[idx] = { ...db.bookings[idx], status };
+    saveDb(db);
+    res.json({ booking: db.bookings[idx] });
+  });
+
+  app.patch('/api/admin/parcels/:id/status', requireAdminSession, (req, res) => {
+    const { id } = req.params;
+    const { status } = req.body as { status?: Parcel['status'] };
+    if (!status) {
+      res.status(400).json({ error: 'Parcel status is required.' });
+      return;
+    }
+    const db = ensureDb();
+    const idx = db.parcels.findIndex((p) => p.id === id);
+    if (idx === -1) {
+      res.status(404).json({ error: 'Parcel not found.' });
+      return;
+    }
+    db.parcels[idx] = { ...db.parcels[idx], status };
+    saveDb(db);
+    res.json({ parcel: db.parcels[idx] });
+  });
+
+  app.patch('/api/admin/vehicles/:id/status', requireAdminSession, (req, res) => {
+    const { id } = req.params;
+    const { status } = req.body as { status?: 'Active' | 'Maintenance' | 'Grounded' };
+    if (!status) {
+      res.status(400).json({ error: 'Vehicle status is required.' });
+      return;
+    }
+    const db = ensureDb();
+    const list = db.vehicles || [...KENYA_VEHICLES];
+    const idx = list.findIndex((v) => v.id === id);
+    if (idx === -1) {
+      res.status(404).json({ error: 'Vehicle not found.' });
+      return;
+    }
+    list[idx] = { ...list[idx], status };
+    db.vehicles = list;
+    saveDb(db);
+    res.json({ vehicle: list[idx] });
+  });
+
   app.get('/api/catalog', (_req, res) => {
     const db = ensureDb();
     res.json({
       saccos: KENYA_SACCOS,
-      vehicles: KENYA_VEHICLES,
+      vehicles: db.vehicles || KENYA_VEHICLES,
       corridors: KENYA_CORRIDORS,
       trips: db.trips,
     });

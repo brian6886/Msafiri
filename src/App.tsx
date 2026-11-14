@@ -12,6 +12,7 @@ import { SeatMapModal } from './components/SeatMapModal';
 import { KENYA_SACCOS, KENYA_VEHICLES, buildSeedTrips } from './data/kenyaTransitData';
 import { auth, signOutUser, testFirestoreConnection } from './firebase';
 import {
+  ADMIN_EMAIL,
   ensureUserProfile,
   isBootstrappedAdmin,
   seedKenyanFleetIfAdmin,
@@ -65,8 +66,10 @@ export default function App() {
   const [selectedTrip, setSelectedTrip] = useState<Trip | null>(null);
   const [showAuthModal, setShowAuthModal] = useState(false);
   const [showAccountModal, setShowAccountModal] = useState(false);
+  const [adminSessionEmail, setAdminSessionEmail] = useState<string | null>(null);
 
-  const isAdmin = isBootstrappedAdmin(user);
+  const hasAdminSession = adminSessionEmail === ADMIN_EMAIL;
+  const isAdmin = isBootstrappedAdmin(user) || hasAdminSession;
 
   const bookings = useMemo(() => {
     const map = new Map<string, Booking>();
@@ -86,9 +89,63 @@ export default function App() {
     return Array.from(map.values());
   }, [fsParcels, guestParcels]);
 
-  // 1. Validate Firestore connectivity and load public catalog + any locally booked guest refs
+  const refreshAdminOverview = async () => {
+    try {
+      if (hasAdminSession) {
+        const res = await fetch('/api/admin/overview', { credentials: 'include' });
+        if (res.ok) {
+          const data = (await res.json()) as {
+            trips?: Trip[];
+            vehicles?: Vehicle[];
+            bookings?: Booking[];
+            parcels?: Parcel[];
+          };
+          if (data.trips?.length) setTrips(data.trips);
+          if (data.vehicles?.length) setVehicles(data.vehicles);
+          if (data.bookings) setGuestBookings(data.bookings);
+          if (data.parcels) setGuestParcels(data.parcels);
+        }
+        return;
+      }
+      if (isBootstrappedAdmin(user)) {
+        const [bRes, pRes, cRes] = await Promise.all([
+          fetch('/api/bookings'),
+          fetch('/api/parcels'),
+          fetch('/api/catalog'),
+        ]);
+        if (bRes.ok) {
+          const bData = (await bRes.json()) as { bookings?: Booking[] };
+          if (bData.bookings) setGuestBookings(bData.bookings);
+        }
+        if (pRes.ok) {
+          const pData = (await pRes.json()) as { parcels?: Parcel[] };
+          if (pData.parcels) setGuestParcels(pData.parcels);
+        }
+        if (cRes.ok) {
+          const cData = (await cRes.json()) as { trips?: Trip[]; vehicles?: Vehicle[] };
+          if (cData.trips?.length) setTrips(cData.trips);
+          if (cData.vehicles?.length) setVehicles(cData.vehicles);
+        }
+      }
+    } catch {
+      // Ignore transient network errors
+    }
+  };
+
+  // 1. Validate Firestore connectivity and load public catalog + any locally booked guest refs + admin session
   useEffect(() => {
     testFirestoreConnection();
+
+    fetch('/api/admin/session', { credentials: 'include' })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data: { authenticated?: boolean; email?: string | null } | null) => {
+        if (data?.authenticated && data.email === ADMIN_EMAIL) {
+          setAdminSessionEmail(data.email);
+        } else {
+          setAdminSessionEmail(null);
+        }
+      })
+      .catch(() => {});
 
     fetch('/api/catalog')
       .then((r) => (r.ok ? r.json() : null))
@@ -189,6 +246,28 @@ export default function App() {
     };
   }, [authReady, user, isAdmin]);
 
+  // 4. Load full admin server overview when authenticated as khaneribrian@gmail.com and guard Operations route
+  useEffect(() => {
+    if (!isAdmin && activePage === 'operations') {
+      setActivePage('book');
+    }
+    if (isAdmin) {
+      void refreshAdminOverview();
+    }
+  }, [isAdmin, hasAdminSession, activePage]);
+
+  const handleSignOutAll = async () => {
+    await fetch('/api/admin/logout', {
+      method: 'POST',
+      credentials: 'include',
+    }).catch(() => {});
+    setAdminSessionEmail(null);
+    await signOutUser().catch(() => {});
+    if (activePage === 'operations') {
+      setActivePage('book');
+    }
+  };
+
   const handleBookingCompleted = (newBooking: Booking) => {
     if (newBooking?.ticketRef) {
       saveStoredRef(LOCAL_BOOKING_REFS_KEY, newBooking.ticketRef);
@@ -232,8 +311,13 @@ export default function App() {
     <div className="min-h-screen flex flex-col bg-slate-50 text-slate-900">
       <Navbar
         activePage={activePage}
-        onNavigate={setActivePage}
+        onNavigate={(page) => {
+          if (page === 'operations' && !isAdmin) return;
+          setActivePage(page);
+        }}
         user={user}
+        isAdmin={isAdmin}
+        adminEmail={adminSessionEmail}
         onOpenAccount={() => setShowAccountModal(true)}
         onSignIn={() => setShowAuthModal(true)}
       />
@@ -271,16 +355,19 @@ export default function App() {
           />
         )}
 
-        {activePage === 'operations' && (
+        {activePage === 'operations' && isAdmin && (
           <OperationsView
             user={user}
             isAdmin={isAdmin}
+            hasAdminSession={hasAdminSession}
             trips={trips}
             saccos={saccos}
             vehicles={vehicles}
             bookings={bookings}
             parcels={parcels}
-            onSignIn={() => setShowAuthModal(true)}
+            onAdminDataChanged={() => {
+              void refreshAdminOverview();
+            }}
           />
         )}
       </main>
@@ -316,13 +403,15 @@ export default function App() {
             >
               Parcel Courier
             </button>
-            <button
-              type="button"
-              onClick={() => setActivePage('operations')}
-              className="hover:text-slate-900"
-            >
-              SACCO Operations
-            </button>
+            {isAdmin && (
+              <button
+                type="button"
+                onClick={() => setActivePage('operations')}
+                className="hover:text-slate-900"
+              >
+                Admin Operations
+              </button>
+            )}
           </div>
         </div>
       </footer>
@@ -352,16 +441,18 @@ export default function App() {
         <AuthModal
           onClose={() => setShowAuthModal(false)}
           onAuthenticated={() => setShowAuthModal(false)}
+          onAdminAuthenticated={(email) => setAdminSessionEmail(email)}
         />
       )}
 
-      {showAccountModal && user && (
+      {showAccountModal && (user || adminSessionEmail) && (
         <AccountModal
           user={user}
+          adminEmail={adminSessionEmail}
           profile={profile}
           isAdmin={isAdmin}
           onClose={() => setShowAccountModal(false)}
-          onSignOut={signOutUser}
+          onSignOut={handleSignOutAll}
           onProfileSaved={(updated) => setProfile(updated)}
         />
       )}

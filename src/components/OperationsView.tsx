@@ -13,7 +13,9 @@ import {
 import React, { useEffect, useMemo, useState } from 'react';
 import { KENYA_TOWNS, getDefaultTravelDate } from '../data/kenyaTransitData';
 import {
+  ADMIN_EMAIL,
   createTripAdmin,
+  isBootstrappedAdmin,
   updateBookingStatus,
   updateParcelStatus,
   updateTripStatusAdmin,
@@ -21,6 +23,7 @@ import {
 } from '../services/firestoreService';
 import type {
   Booking,
+  BookingStatus,
   NtsaPlateReport,
   Parcel,
   ParcelStatus,
@@ -34,12 +37,13 @@ import type {
 interface OperationsViewProps {
   user: User | null;
   isAdmin: boolean;
+  hasAdminSession: boolean;
   trips: Trip[];
   saccos: Sacco[];
   vehicles: Vehicle[];
   bookings: Booking[];
   parcels: Parcel[];
-  onSignIn: () => void;
+  onAdminDataChanged: () => void;
 }
 
 type OpsTab = 'verify' | 'dispatch' | 'fleet' | 'parcels' | 'ledger';
@@ -47,12 +51,13 @@ type OpsTab = 'verify' | 'dispatch' | 'fleet' | 'parcels' | 'ledger';
 export const OperationsView: React.FC<OperationsViewProps> = ({
   user,
   isAdmin,
+  hasAdminSession,
   trips,
   saccos,
   vehicles,
   bookings,
   parcels,
-  onSignIn,
+  onAdminDataChanged,
 }) => {
   const [activeTab, setActiveTab] = useState<OpsTab>('verify');
 
@@ -134,7 +139,69 @@ export const OperationsView: React.FC<OperationsViewProps> = ({
 
   const handleMarkBoarded = async (bookingId: string) => {
     if (!isAdmin) return;
-    await updateBookingStatus(bookingId, 'Boarded');
+    if (hasAdminSession) {
+      await fetch(`/api/admin/bookings/${encodeURIComponent(bookingId)}/status`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ status: 'Boarded' as BookingStatus }),
+      });
+    }
+    if (isBootstrappedAdmin(user)) {
+      await updateBookingStatus(bookingId, 'Boarded').catch(() => {});
+    }
+    onAdminDataChanged();
+  };
+
+  const handleUpdateTripStatus = async (tripId: string, status: TripStatus) => {
+    if (!isAdmin) return;
+    if (hasAdminSession) {
+      await fetch(`/api/admin/trips/${encodeURIComponent(tripId)}/status`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ status }),
+      });
+    }
+    if (isBootstrappedAdmin(user)) {
+      await updateTripStatusAdmin(tripId, status).catch(() => {});
+    }
+    onAdminDataChanged();
+  };
+
+  const handleUpdateVehicleStatus = async (
+    vehicleId: string,
+    status: Vehicle['status']
+  ) => {
+    if (!isAdmin) return;
+    if (hasAdminSession) {
+      await fetch(`/api/admin/vehicles/${encodeURIComponent(vehicleId)}/status`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ status }),
+      });
+    }
+    if (isBootstrappedAdmin(user)) {
+      await updateVehicleStatusAdmin(vehicleId, status).catch(() => {});
+    }
+    onAdminDataChanged();
+  };
+
+  const handleUpdateParcelStatus = async (parcelId: string, status: ParcelStatus) => {
+    if (!isAdmin) return;
+    if (hasAdminSession) {
+      await fetch(`/api/admin/parcels/${encodeURIComponent(parcelId)}/status`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ status }),
+      });
+    }
+    if (isBootstrappedAdmin(user)) {
+      await updateParcelStatus(parcelId, status).catch(() => {});
+    }
+    onAdminDataChanged();
   };
 
   const handleCheckNtsaPlate = async (e: React.FormEvent) => {
@@ -162,10 +229,8 @@ export const OperationsView: React.FC<OperationsViewProps> = ({
     try {
       const sacco = saccos.find((s) => s.id === newSaccoId) || saccos[0];
       const vehicle = vehicles.find((v) => v.id === newVehicleId) || vehicles[0];
-      const tripId = `trip_${Date.now()}_${Math.random().toString(36).slice(2, 5)}`;
-
-      await createTripAdmin({
-        id: tripId,
+      const tripPayload: Trip = {
+        id: `trip_${Date.now()}_${Math.random().toString(36).slice(2, 5)}`,
         saccoId: sacco.id,
         saccoName: sacco.name,
         vehicleId: vehicle.id,
@@ -184,7 +249,24 @@ export const OperationsView: React.FC<OperationsViewProps> = ({
         availableSeats: vehicle.capacity,
         bookedSeats: [],
         status: 'Scheduled',
-      });
+      };
+
+      if (hasAdminSession) {
+        const res = await fetch('/api/admin/trips', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'include',
+          body: JSON.stringify(tripPayload),
+        });
+        if (!res.ok) {
+          const errJson = (await res.json().catch(() => ({}))) as { error?: string };
+          throw new Error(errJson.error || 'Could not publish trip.');
+        }
+      }
+      if (isBootstrappedAdmin(user)) {
+        await createTripAdmin(tripPayload).catch(() => {});
+      }
+      onAdminDataChanged();
       setDispatchMessage(`Dispatched ${vehicle.plateNumber} (${newOrigin} to ${newDestination}).`);
     } catch (err) {
       setDispatchMessage(err instanceof Error ? err.message : 'Could not create trip.');
@@ -192,6 +274,10 @@ export const OperationsView: React.FC<OperationsViewProps> = ({
       setCreatingTrip(false);
     }
   };
+
+  if (!isAdmin) {
+    return null;
+  }
 
   const navTabs: Array<{ id: OpsTab; label: string; icon: React.ReactNode }> = [
     { id: 'verify', label: 'Conductor Check-In', icon: <QrCode className="w-4 h-4" /> },
@@ -208,11 +294,9 @@ export const OperationsView: React.FC<OperationsViewProps> = ({
         <aside className="lg:col-span-3 bg-white border border-slate-200 rounded-xl p-4 space-y-4">
           <div className="px-2 pt-1 pb-3 border-b border-slate-100">
             <h1 className="font-display text-lg font-bold text-slate-900">
-              SACCO Operations
+              Admin Operations
             </h1>
-            <p className="text-xs text-slate-500 mt-0.5">
-              {isAdmin ? 'Admin Dispatcher Access' : 'Stage Inspector View'}
-            </p>
+            <p className="text-xs text-slate-500 mt-0.5 truncate">{ADMIN_EMAIL}</p>
           </div>
 
           <nav className="space-y-1" aria-label="Operations sections">
@@ -233,32 +317,15 @@ export const OperationsView: React.FC<OperationsViewProps> = ({
             ))}
           </nav>
 
-          {!user ? (
-            <div className="p-3 bg-slate-50 border border-slate-200 rounded-lg space-y-2">
-              <p className="text-xs text-slate-600">
-                Sign in with an authorized SACCO admin account to mutate live fleet &amp; trip
-                records.
-              </p>
-              <button
-                type="button"
-                onClick={onSignIn}
-                className="w-full py-2 text-xs font-semibold text-white bg-emerald-700 hover:bg-emerald-800 rounded-md"
-              >
-                Sign In
-              </button>
-            </div>
-          ) : !isAdmin ? (
-            <div className="p-3 bg-amber-50 border border-amber-200 rounded-lg text-xs text-amber-900 space-y-1">
-              <p className="font-semibold flex items-center gap-1">
-                <ShieldAlert className="w-3.5 h-3.5" />
-                Read-Only Operator Preview
-              </p>
-              <p>
-                Firestore mutations are restricted to verified SACCO administrators. QR &amp; NTSA
-                verification APIs remain active.
-              </p>
-            </div>
-          ) : null}
+          <div className="p-3 bg-emerald-50 border border-emerald-200 rounded-lg text-xs text-emerald-950 space-y-1">
+            <p className="font-semibold flex items-center gap-1.5">
+              <ShieldAlert className="w-3.5 h-3.5 text-emerald-700" />
+              Restricted Admin Console
+            </p>
+            <p>
+              Visible exclusively when signed in as <span className="font-mono">{ADMIN_EMAIL}</span>.
+            </p>
+          </div>
         </aside>
 
         {/* Main Workspace */}
@@ -568,11 +635,10 @@ export const OperationsView: React.FC<OperationsViewProps> = ({
                             {t.capacity - t.availableSeats}/{t.capacity} seats
                           </td>
                           <td className="py-2.5 text-right">
-                            {isAdmin ? (
                               <select
                                 value={t.status}
                                 onChange={(e) =>
-                                  updateTripStatusAdmin(t.id, e.target.value as TripStatus)
+                                  handleUpdateTripStatus(t.id, e.target.value as TripStatus)
                                 }
                                 className="px-2 py-1 text-xs bg-slate-50 border border-slate-300 rounded"
                               >
@@ -582,9 +648,6 @@ export const OperationsView: React.FC<OperationsViewProps> = ({
                                 <option value="Arrived">Arrived</option>
                                 <option value="Cancelled">Cancelled</option>
                               </select>
-                            ) : (
-                              <span className="font-medium text-slate-700">{t.status}</span>
-                            )}
                           </td>
                         </tr>
                       ))}
@@ -685,11 +748,10 @@ export const OperationsView: React.FC<OperationsViewProps> = ({
                             {v.speedGovernorStatus}
                           </td>
                           <td className="py-2.5 text-right">
-                            {isAdmin ? (
                               <select
                                 value={v.status}
                                 onChange={(e) =>
-                                  updateVehicleStatusAdmin(
+                                  handleUpdateVehicleStatus(
                                     v.id,
                                     e.target.value as Vehicle['status']
                                   )
@@ -700,9 +762,6 @@ export const OperationsView: React.FC<OperationsViewProps> = ({
                                 <option value="Maintenance">Maintenance</option>
                                 <option value="Grounded">Grounded</option>
                               </select>
-                            ) : (
-                              <span>{v.status}</span>
-                            )}
                           </td>
                         </tr>
                       ))}
@@ -746,11 +805,10 @@ export const OperationsView: React.FC<OperationsViewProps> = ({
                             KES {p.feeKes.toLocaleString()}
                           </td>
                           <td className="py-2.5 text-right">
-                            {isAdmin ? (
                               <select
                                 value={p.status}
                                 onChange={(e) =>
-                                  updateParcelStatus(p.id, e.target.value as ParcelStatus)
+                                  handleUpdateParcelStatus(p.id, e.target.value as ParcelStatus)
                                 }
                                 className="px-2 py-1 text-xs bg-slate-50 border border-slate-300 rounded"
                               >
@@ -760,9 +818,6 @@ export const OperationsView: React.FC<OperationsViewProps> = ({
                                 <option value="Collected">Collected</option>
                                 <option value="Cancelled">Cancelled</option>
                               </select>
-                            ) : (
-                              <span>{p.status}</span>
-                            )}
                           </td>
                         </tr>
                       ))}
