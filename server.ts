@@ -94,6 +94,20 @@ function normalizeKenyanPhone(rawPhone: string): string | null {
   return null;
 }
 
+const SANDBOX_CERT_PATH = path.resolve(process.cwd(), 'certs', 'SandboxCertificate.cer');
+
+function encryptInitiatorPassword(initiatorPassword: string): string {
+  const certPem = fs.readFileSync(SANDBOX_CERT_PATH, 'utf8');
+  const encrypted = crypto.publicEncrypt(
+    {
+      key: certPem,
+      padding: crypto.constants.RSA_PKCS1_PADDING,
+    },
+    Buffer.from(initiatorPassword, 'utf8')
+  );
+  return encrypted.toString('base64');
+}
+
 function getDarajaConfig(reqHost?: string, reqProto?: string) {
   const env = (process.env.MPESA_ENV || 'sandbox').toLowerCase() === 'production'
     ? 'production'
@@ -113,8 +127,21 @@ function getDarajaConfig(reqHost?: string, reqProto?: string) {
   const settlementPhone =
     normalizeKenyanPhone(process.env.MPESA_SETTLEMENT_PHONE || DEFAULT_SETTLEMENT_PHONE) ||
     DEFAULT_SETTLEMENT_PHONE;
-  const initiatorName = (process.env.MPESA_INITIATOR_NAME || '').trim();
-  const securityCredential = (process.env.MPESA_SECURITY_CREDENTIAL || '').trim();
+  const initiatorName = (
+    process.env.MPESA_INITIATOR_NAME || (env === 'sandbox' ? 'testapi' : '')
+  ).trim();
+  const initiatorPassword = (process.env.MPESA_INITIATOR_PASSWORD || '').trim();
+  const rawCredential = (process.env.MPESA_SECURITY_CREDENTIAL || '').trim();
+
+  let securityCredential = rawCredential;
+  let credentialMode: 'encrypted-from-password' | 'pre-encrypted' | 'missing' = rawCredential
+    ? 'pre-encrypted'
+    : 'missing';
+
+  if (initiatorPassword) {
+    securityCredential = encryptInitiatorPassword(initiatorPassword);
+    credentialMode = 'encrypted-from-password';
+  }
 
   const originBase =
     (process.env.APP_URL || '').trim().replace(/\/$/, '') ||
@@ -133,6 +160,7 @@ function getDarajaConfig(reqHost?: string, reqProto?: string) {
   return {
     configured: missingVars.length === 0,
     b2cConfigured: Boolean(missingVars.length === 0 && initiatorName && securityCredential),
+    credentialMode,
     missingVars,
     env: env as 'sandbox' | 'production',
     baseUrl,
@@ -274,6 +302,7 @@ async function startServer() {
     res.json({
       configured: cfg.configured,
       b2cConfigured: cfg.b2cConfigured,
+      credentialMode: cfg.credentialMode,
       environment: cfg.env,
       missingVars: cfg.missingVars,
       shortcode: cfg.shortcode || null,

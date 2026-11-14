@@ -82,6 +82,7 @@ export const OperationsView: React.FC<OperationsViewProps> = ({
   const [darajaStatus, setDarajaStatus] = useState<{
     configured: boolean;
     b2cConfigured: boolean;
+    credentialMode?: 'encrypted-from-password' | 'pre-encrypted' | 'missing';
     environment: string;
     missingVars: string[];
     shortcode: string | null;
@@ -811,7 +812,7 @@ export const OperationsView: React.FC<OperationsViewProps> = ({
                         : 'Awaiting Daraja API Secrets'}
                     </span>
                   </div>
-                  <dl className="grid grid-cols-1 sm:grid-cols-3 gap-4 text-xs pt-2 border-t border-slate-100">
+                  <dl className="grid grid-cols-1 sm:grid-cols-4 gap-4 text-xs pt-2 border-t border-slate-100">
                     <div>
                       <dt className="text-slate-500">Settlement Number (Redirect)</dt>
                       <dd className="font-mono font-semibold text-slate-900 mt-0.5">
@@ -822,6 +823,16 @@ export const OperationsView: React.FC<OperationsViewProps> = ({
                       <dt className="text-slate-500">Paybill / Shortcode</dt>
                       <dd className="font-mono font-semibold text-slate-900 mt-0.5">
                         {darajaStatus.shortcode || '174379'}
+                      </dd>
+                    </div>
+                    <div>
+                      <dt className="text-slate-500">B2C SecurityCredential</dt>
+                      <dd className="font-medium text-slate-900 mt-0.5">
+                        {darajaStatus.credentialMode === 'encrypted-from-password'
+                          ? 'Encrypted (SandboxCertificate.cer)'
+                          : darajaStatus.credentialMode === 'pre-encrypted'
+                          ? 'Configured (Pre-encrypted)'
+                          : 'Awaiting MPESA_INITIATOR_PASSWORD'}
                       </dd>
                     </div>
                     <div>
