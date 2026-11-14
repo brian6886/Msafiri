@@ -12,6 +12,7 @@ interface SeatMapModalProps {
   onClose: () => void;
   onSignIn: () => Promise<void>;
   onBookingCompleted: (booking: Booking) => void;
+  onViewTickets?: () => void;
 }
 
 function buildSeatRows(trip: Trip): Array<Array<{ id: string; label: string; isDriver?: boolean }>> {
@@ -98,6 +99,7 @@ export const SeatMapModal: React.FC<SeatMapModalProps> = ({
   onClose,
   onSignIn,
   onBookingCompleted,
+  onViewTickets,
 }) => {
   const corridor = useMemo(
     () =>
@@ -156,10 +158,6 @@ export const SeatMapModal: React.FC<SeatMapModalProps> = ({
     e.preventDefault();
     setErrorMsg(null);
 
-    if (!user) {
-      setErrorMsg('Sign in with Google first to save your boarding pass to your account.');
-      return;
-    }
     if (selectedSeats.length === 0) {
       setErrorMsg('Select at least one available seat from the cabin layout.');
       return;
@@ -232,11 +230,12 @@ export const SeatMapModal: React.FC<SeatMapModalProps> = ({
       }
 
       const bookingId = `bkg_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
+      const passengerUid = user ? user.uid : `guest_${completedTx.phone}`;
       const bookingRecord: Omit<Booking, 'createdAt'> = {
         id: bookingId,
         ticketRef,
         tripId: trip.id,
-        passengerUid: user.uid,
+        passengerUid,
         passengerName: passengerName.trim().slice(0, 100),
         passengerPhone: completedTx.phone,
         pickupStage,
@@ -255,9 +254,21 @@ export const SeatMapModal: React.FC<SeatMapModalProps> = ({
         qrSignature: signData.signature,
       };
 
-      await createConfirmedBookingBatch(trip, bookingRecord);
+      // Always persist booking and seat lock in Express server DB
+      await fetch('/api/bookings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(bookingRecord),
+      });
+
+      // Mirror to Firestore when signed in with verified account
+      if (user && user.emailVerified) {
+        await createConfirmedBookingBatch(trip, bookingRecord).catch(() => {});
+      }
+
       setStkInfo(completedTx);
       setStage('success');
+      onBookingCompleted(bookingRecord as Booking);
     } catch (err) {
       setStage('select');
       setErrorMsg(err instanceof Error ? err.message : 'Booking could not be completed.');
@@ -340,7 +351,7 @@ export const SeatMapModal: React.FC<SeatMapModalProps> = ({
             <div className="pt-2">
               <button
                 type="button"
-                onClick={() => onBookingCompleted({} as Booking)}
+                onClick={() => (onViewTickets ? onViewTickets() : onClose())}
                 className="px-6 py-2.5 text-sm font-semibold text-white bg-emerald-700 hover:bg-emerald-800 rounded-lg transition-colors"
               >
                 View Boarding Pass
@@ -524,23 +535,23 @@ export const SeatMapModal: React.FC<SeatMapModalProps> = ({
                 </div>
               )}
 
-              {!user ? (
+              <button
+                type="submit"
+                disabled={selectedSeats.length === 0}
+                className="w-full py-2.5 px-4 text-sm font-semibold text-white bg-emerald-700 hover:bg-emerald-800 disabled:bg-slate-300 disabled:cursor-not-allowed rounded-lg transition-colors flex items-center justify-center gap-2"
+              >
+                <ShieldCheck className="w-4 h-4" />
+                Send M-Pesa STK Push (KES {totalKes.toLocaleString()})
+              </button>
+
+              {!user && (
                 <button
                   type="button"
                   disabled={isSigningIn}
                   onClick={handleTriggerSignIn}
-                  className="w-full py-2.5 px-4 text-sm font-semibold text-white bg-slate-900 hover:bg-slate-800 rounded-lg transition-colors flex items-center justify-center gap-2"
+                  className="w-full py-2 px-4 text-xs font-medium text-slate-600 hover:text-slate-900 border border-slate-200 rounded-lg transition-colors"
                 >
-                  {isSigningIn ? 'Connecting...' : 'Sign In with Google to Pay & Lock Seat'}
-                </button>
-              ) : (
-                <button
-                  type="submit"
-                  disabled={selectedSeats.length === 0}
-                  className="w-full py-2.5 px-4 text-sm font-semibold text-white bg-emerald-700 hover:bg-emerald-800 disabled:bg-slate-300 disabled:cursor-not-allowed rounded-lg transition-colors flex items-center justify-center gap-2"
-                >
-                  <ShieldCheck className="w-4 h-4" />
-                  Send M-Pesa STK Push (KES {totalKes.toLocaleString()})
+                  {isSigningIn ? 'Opening Sign In...' : 'Optional: Sign In or Create Account to Sync'}
                 </button>
               )}
             </form>

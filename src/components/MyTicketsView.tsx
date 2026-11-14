@@ -10,6 +10,7 @@ interface MyTicketsViewProps {
   bookings: Booking[];
   onSignIn: () => void;
   onJumpToBook: () => void;
+  onCancelGuestBooking: (bookingId: string) => Promise<void>;
 }
 
 export const MyTicketsView: React.FC<MyTicketsViewProps> = ({
@@ -17,38 +18,51 @@ export const MyTicketsView: React.FC<MyTicketsViewProps> = ({
   bookings,
   onSignIn,
   onJumpToBook,
+  onCancelGuestBooking,
 }) => {
   const [busyId, setBusyId] = useState<string | null>(null);
 
-  const handleCancelBooking = async (bookingId: string) => {
-    setBusyId(bookingId);
+  const handleCancelBooking = async (booking: Booking) => {
+    setBusyId(booking.id);
     try {
-      await updateBookingStatus(bookingId, 'Cancelled');
+      if (user && user.emailVerified && !booking.passengerUid.startsWith('guest_')) {
+        await updateBookingStatus(booking.id, 'Cancelled').catch(() => {});
+      }
+      await onCancelGuestBooking(booking.id);
     } finally {
       setBusyId(null);
     }
   };
 
-  if (!user) {
+  if (!user && bookings.length === 0) {
     return (
       <div className="max-w-3xl mx-auto px-4 sm:px-6 py-16 text-center space-y-4">
         <div className="w-12 h-12 mx-auto rounded-full bg-slate-100 text-slate-700 flex items-center justify-center">
           <Ticket className="w-6 h-6" />
         </div>
         <h1 className="font-display text-2xl font-bold text-slate-900">
-          Sign in to access your QR boarding passes
+          Your Digital Boarding Passes
         </h1>
         <p className="text-sm text-slate-600 max-w-md mx-auto">
-          Your confirmed M-Pesa tickets, seat allocations, and stage manifests are linked securely
-          to your Google account.
+          Book a departure with M-Pesa to generate an instant QR boarding pass, or sign in to
+          sync tickets saved to your account.
         </p>
-        <button
-          type="button"
-          onClick={onSignIn}
-          className="px-5 py-2.5 text-sm font-semibold text-white bg-emerald-700 hover:bg-emerald-800 rounded-lg transition-colors"
-        >
-          Sign In with Google
-        </button>
+        <div className="flex flex-wrap items-center justify-center gap-3">
+          <button
+            type="button"
+            onClick={onJumpToBook}
+            className="px-5 py-2.5 text-sm font-semibold text-white bg-emerald-700 hover:bg-emerald-800 rounded-lg transition-colors"
+          >
+            Browse Departures
+          </button>
+          <button
+            type="button"
+            onClick={onSignIn}
+            className="px-5 py-2.5 text-sm font-semibold text-slate-900 bg-white border border-slate-300 hover:bg-slate-50 rounded-lg transition-colors"
+          >
+            Sign In / Sign Up
+          </button>
+        </div>
       </div>
     );
   }
@@ -181,7 +195,7 @@ export const MyTicketsView: React.FC<MyTicketsViewProps> = ({
                       <button
                         type="button"
                         disabled={busyId === b.id}
-                        onClick={() => handleCancelBooking(b.id)}
+                        onClick={() => handleCancelBooking(b)}
                         className="text-xs font-medium text-red-700 hover:text-red-800 inline-flex items-center gap-1"
                       >
                         <XCircle className="w-3.5 h-3.5" />

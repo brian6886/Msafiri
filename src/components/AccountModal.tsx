@@ -1,6 +1,7 @@
 import type { User } from 'firebase/auth';
-import { LogOut, Save, X } from 'lucide-react';
+import { LogOut, MailCheck, Save, X } from 'lucide-react';
 import React, { useState } from 'react';
+import { resendVerificationEmail } from '../firebase';
 import { updateUserProfileContact } from '../services/firestoreService';
 import type { UserProfile } from '../types';
 
@@ -30,17 +31,20 @@ export const AccountModal: React.FC<AccountModalProps> = ({
   );
   const [saving, setSaving] = useState(false);
   const [savedNotice, setSavedNotice] = useState(false);
+  const [verificationSent, setVerificationSent] = useState(false);
 
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
     setSaving(true);
     setSavedNotice(false);
     try {
-      await updateUserProfileContact(user.uid, {
-        displayName,
-        phone,
-        preferredStage,
-      });
+      if (user.emailVerified) {
+        await updateUserProfileContact(user.uid, {
+          displayName,
+          phone,
+          preferredStage,
+        });
+      }
       onProfileSaved({
         uid: user.uid,
         email: user.email || '',
@@ -53,6 +57,11 @@ export const AccountModal: React.FC<AccountModalProps> = ({
     } finally {
       setSaving(false);
     }
+  };
+
+  const handleResendVerification = async () => {
+    await resendVerificationEmail().catch(() => {});
+    setVerificationSent(true);
   };
 
   return (
@@ -83,6 +92,23 @@ export const AccountModal: React.FC<AccountModalProps> = ({
         </div>
 
         <form onSubmit={handleSave} className="p-6 space-y-4">
+          {!user.emailVerified && (
+            <div className="p-3 bg-amber-50 border border-amber-200 rounded-lg text-xs text-amber-900 space-y-2">
+              <p>
+                Verify your email address ({user.email}) to sync tickets directly to your
+                cloud Firestore profile.
+              </p>
+              <button
+                type="button"
+                onClick={handleResendVerification}
+                className="font-semibold text-amber-950 underline inline-flex items-center gap-1"
+              >
+                <MailCheck className="w-3.5 h-3.5" />
+                {verificationSent ? 'Verification link sent' : 'Resend verification email'}
+              </button>
+            </div>
+          )}
+
           <div>
             <label className="block text-xs font-medium text-slate-700 mb-1">
               Full Name (PSV Manifest)
@@ -104,7 +130,7 @@ export const AccountModal: React.FC<AccountModalProps> = ({
               type="tel"
               value={phone}
               onChange={(e) => setPhone(e.target.value)}
-              placeholder="0712 345 678"
+              placeholder="0712 345 678 or 0112 898 591"
               className="w-full px-3 py-2 text-sm font-mono bg-white border border-slate-300 rounded-lg"
             />
           </div>
@@ -129,7 +155,7 @@ export const AccountModal: React.FC<AccountModalProps> = ({
 
           {savedNotice && (
             <p className="text-xs text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-lg p-2.5">
-              Profile preferences saved to Firestore.
+              Profile preferences saved.
             </p>
           )}
 

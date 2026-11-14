@@ -804,6 +804,96 @@ async function startServer() {
     res.json(report);
   });
 
+  // Persist confirmed bookings & update seat inventory in server DB (supports guest & synced bookings)
+  app.post('/api/bookings', (req, res) => {
+    const booking = req.body as Booking;
+    if (!booking?.id || !booking?.ticketRef || !booking?.tripId || !Array.isArray(booking?.seats)) {
+      res.status(400).json({ error: 'Invalid booking payload.' });
+      return;
+    }
+
+    const db = ensureDb();
+    const tripIdx = db.trips.findIndex((t) => t.id === booking.tripId);
+    if (tripIdx !== -1) {
+      const trip = db.trips[tripIdx];
+      const mergedSeats = Array.from(new Set([...trip.bookedSeats, ...booking.seats]));
+      db.trips[tripIdx] = {
+        ...trip,
+        bookedSeats: mergedSeats,
+        availableSeats: Math.max(0, trip.capacity - mergedSeats.length),
+      };
+    }
+
+    const existingIdx = db.bookings.findIndex((b) => b.id === booking.id);
+    if (existingIdx === -1) {
+      db.bookings.unshift(booking);
+    } else {
+      db.bookings[existingIdx] = booking;
+    }
+    saveDb(db);
+    res.json({ booking, trip: tripIdx !== -1 ? db.trips[tripIdx] : null });
+  });
+
+  app.get('/api/bookings', (req, res) => {
+    const db = ensureDb();
+    const refsParam = String(req.query.refs || '').trim();
+    if (refsParam) {
+      const refSet = new Set(refsParam.split(',').map((r) => r.trim()).filter(Boolean));
+      res.json({ bookings: db.bookings.filter((b) => refSet.has(b.ticketRef) || refSet.has(b.id)) });
+      return;
+    }
+    res.json({ bookings: db.bookings });
+  });
+
+  app.patch('/api/bookings/:id/cancel', (req, res) => {
+    const { id } = req.params;
+    const db = ensureDb();
+    const idx = db.bookings.findIndex((b) => b.id === id);
+    if (idx === -1) {
+      res.status(404).json({ error: 'Booking not found.' });
+      return;
+    }
+    const target = db.bookings[idx];
+    db.bookings[idx] = { ...target, status: 'Cancelled' };
+    const tripIdx = db.trips.findIndex((t) => t.id === target.tripId);
+    if (tripIdx !== -1) {
+      const trip = db.trips[tripIdx];
+      const nextBooked = trip.bookedSeats.filter((s) => !target.seats.includes(s));
+      db.trips[tripIdx] = {
+        ...trip,
+        bookedSeats: nextBooked,
+        availableSeats: Math.min(trip.capacity, trip.capacity - nextBooked.length),
+      };
+    }
+    saveDb(db);
+    res.json({ booking: db.bookings[idx] });
+  });
+
+  app.post('/api/parcels', (req, res) => {
+    const parcel = req.body as Parcel;
+    if (!parcel?.id || !parcel?.waybillNo) {
+      res.status(400).json({ error: 'Invalid parcel payload.' });
+      return;
+    }
+    const db = ensureDb();
+    const idx = db.parcels.findIndex((p) => p.id === parcel.id);
+    if (idx === -1) db.parcels.unshift(parcel);
+    else db.parcels[idx] = parcel;
+    saveDb(db);
+    res.json({ parcel });
+  });
+
+  app.get('/api/parcels', (req, res) => {
+    const db = ensureDb();
+    const refsParam = String(req.query.refs || '').trim();
+    if (refsParam) {
+      const refSet = new Set(refsParam.split(',').map((r) => r.trim()).filter(Boolean));
+      res.json({ parcels: db.parcels.filter((p) => refSet.has(p.waybillNo) || refSet.has(p.id)) });
+      return;
+    }
+    res.json({ parcels: db.parcels });
+  });
+
   if (process.env.NODE_ENV !== 'production') {
     const vite = await createViteServer({
       server: { middlewareMode: true },

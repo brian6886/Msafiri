@@ -9,9 +9,15 @@ interface ParcelViewProps {
   user: User | null;
   parcels: Parcel[];
   onSignIn: () => void;
+  onParcelCreated: (parcel: Parcel) => void;
 }
 
-export const ParcelView: React.FC<ParcelViewProps> = ({ user, parcels, onSignIn }) => {
+export const ParcelView: React.FC<ParcelViewProps> = ({
+  user,
+  parcels,
+  onSignIn,
+  onParcelCreated,
+}) => {
   const [originCity, setOriginCity] = useState('Nairobi');
   const [destinationCity, setDestinationCity] = useState('Eldoret');
   const [saccoName, setSaccoName] = useState(KENYA_SACCOS[0].name);
@@ -32,10 +38,6 @@ export const ParcelView: React.FC<ParcelViewProps> = ({ user, parcels, onSignIn 
 
   const handleDispatchParcel = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!user) {
-      onSignIn();
-      return;
-    }
     if (originCity === destinationCity) {
       setErrorMsg('Origin and destination towns must differ.');
       return;
@@ -77,11 +79,11 @@ export const ParcelView: React.FC<ParcelViewProps> = ({ user, parcels, onSignIn 
       if (!receipt) throw new Error('M-Pesa confirmation timed out before PIN entry.');
 
       const parcelId = `pcl_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
-      await createParcelWaybill({
+      const parcelRecord: Omit<Parcel, 'createdAt'> = {
         id: parcelId,
         waybillNo,
-        senderUid: user.uid,
-        senderName: (user.displayName || 'Sender').slice(0, 100),
+        senderUid: user ? user.uid : `guest_${senderPhone.replace(/\D/g, '')}`,
+        senderName: (user?.displayName || 'Sender').slice(0, 100),
         senderPhone: senderPhone.trim().slice(0, 16),
         recipientName: recipientName.trim().slice(0, 100),
         recipientPhone: recipientPhone.trim().slice(0, 16),
@@ -93,8 +95,19 @@ export const ParcelView: React.FC<ParcelViewProps> = ({ user, parcels, onSignIn 
         feeKes,
         mpesaReceipt: receipt,
         status: 'Booked',
+      };
+
+      await fetch('/api/parcels', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(parcelRecord),
       });
 
+      if (user && user.emailVerified) {
+        await createParcelWaybill(parcelRecord).catch(() => {});
+      }
+
+      onParcelCreated(parcelRecord as Parcel);
       setSuccessWaybill(`${waybillNo} · M-Pesa ${receipt}`);
       setRecipientName('');
       setDescription('');
@@ -270,7 +283,7 @@ export const ParcelView: React.FC<ParcelViewProps> = ({ user, parcels, onSignIn 
             className="w-full py-2.5 px-4 text-sm font-semibold text-white bg-emerald-700 hover:bg-emerald-800 disabled:bg-slate-400 rounded-lg transition-colors flex items-center justify-center gap-2"
           >
             {submitting && <Loader2 className="w-4 h-4 animate-spin" />}
-            {user ? `Pay & Generate Waybill (KES ${feeKes})` : 'Sign In with Google to Dispatch'}
+            Pay via M-Pesa &amp; Generate Waybill (KES {feeKes})
           </button>
         </form>
 
@@ -283,16 +296,22 @@ export const ParcelView: React.FC<ParcelViewProps> = ({ user, parcels, onSignIn 
             <span className="text-xs font-mono text-slate-500">{parcels.length} records</span>
           </div>
 
-          {!user ? (
+          {parcels.length === 0 ? (
             <div className="py-12 text-center space-y-3">
               <Package className="w-8 h-8 text-slate-400 mx-auto" />
               <p className="text-sm text-slate-600">
-                Sign in to create and track SACCO parcel waybills across Kenya.
+                No parcel waybills dispatched yet. Book a parcel or sign in to view saved
+                waybills.
               </p>
-            </div>
-          ) : parcels.length === 0 ? (
-            <div className="py-12 text-center text-sm text-slate-500">
-              No parcel waybills dispatched under your account yet.
+              {!user && (
+                <button
+                  type="button"
+                  onClick={onSignIn}
+                  className="px-4 py-2 text-xs font-semibold text-slate-900 bg-slate-100 hover:bg-slate-200 rounded-lg"
+                >
+                  Sign In / Sign Up
+                </button>
+              )}
             </div>
           ) : (
             <div className="overflow-x-auto">

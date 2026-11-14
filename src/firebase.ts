@@ -1,9 +1,13 @@
 import { initializeApp } from 'firebase/app';
 import {
   GoogleAuthProvider,
+  createUserWithEmailAndPassword,
   getAuth,
+  sendEmailVerification,
+  signInWithEmailAndPassword,
   signInWithPopup,
   signOut,
+  updateProfile,
   type User,
 } from 'firebase/auth';
 import {
@@ -88,6 +92,83 @@ export async function signInWithGoogle(): Promise<User> {
   return cred.user;
 }
 
+export async function signUpWithEmail(
+  fullName: string,
+  email: string,
+  password: string
+): Promise<User> {
+  const cred = await createUserWithEmailAndPassword(auth, email.trim(), password);
+  if (fullName.trim()) {
+    await updateProfile(cred.user, { displayName: fullName.trim() });
+  }
+  await sendEmailVerification(cred.user).catch(() => {});
+  return cred.user;
+}
+
+export async function signInWithEmail(email: string, password: string): Promise<User> {
+  const cred = await signInWithEmailAndPassword(auth, email.trim(), password);
+  return cred.user;
+}
+
+export async function resendVerificationEmail(): Promise<void> {
+  if (auth.currentUser) {
+    await sendEmailVerification(auth.currentUser);
+  }
+}
+
 export async function signOutUser(): Promise<void> {
   await signOut(auth);
+}
+
+export function formatFirebaseAuthError(err: unknown): {
+  message: string;
+  needsEmailProviderEnable: boolean;
+} {
+  const code =
+    typeof err === 'object' && err !== null && 'code' in err
+      ? String((err as { code: unknown }).code)
+      : '';
+  const rawMsg = err instanceof Error ? err.message : String(err);
+
+  if (code === 'auth/operation-not-allowed' || code === 'auth/admin-restricted-operation') {
+    return {
+      message:
+        'Email/Password sign-in is not yet enabled in Firebase Authentication. Enable "Email/Password" in Firebase Console -> Authentication -> Sign-in method, or use Continue with Google.',
+      needsEmailProviderEnable: true,
+    };
+  }
+  if (code === 'auth/popup-blocked') {
+    return {
+      message: 'Browser blocked the Google sign-in popup. Allow popups for this site or sign in with Email/Password.',
+      needsEmailProviderEnable: false,
+    };
+  }
+  if (code === 'auth/popup-closed-by-user') {
+    return {
+      message: 'Google sign-in popup was closed before completing.',
+      needsEmailProviderEnable: false,
+    };
+  }
+  if (code === 'auth/email-already-in-use') {
+    return {
+      message: 'An account with this email already exists. Switch to Sign In.',
+      needsEmailProviderEnable: false,
+    };
+  }
+  if (code === 'auth/invalid-credential' || code === 'auth/wrong-password' || code === 'auth/user-not-found') {
+    return {
+      message: 'Incorrect email or password.',
+      needsEmailProviderEnable: false,
+    };
+  }
+  if (code === 'auth/weak-password') {
+    return {
+      message: 'Password must be at least 6 characters.',
+      needsEmailProviderEnable: false,
+    };
+  }
+  return {
+    message: rawMsg || 'Authentication failed. Please try again.',
+    needsEmailProviderEnable: false,
+  };
 }

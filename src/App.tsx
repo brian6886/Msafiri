@@ -1,6 +1,7 @@
 import { onAuthStateChanged, type User } from 'firebase/auth';
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { AccountModal } from './components/AccountModal';
+import { AuthModal } from './components/AuthModal';
 import { BookingView } from './components/BookingView';
 import { MyTicketsView } from './components/MyTicketsView';
 import { Navbar, type AppPage } from './components/Navbar';
@@ -9,7 +10,7 @@ import { ParcelView } from './components/ParcelView';
 import { RoutesView } from './components/RoutesView';
 import { SeatMapModal } from './components/SeatMapModal';
 import { KENYA_SACCOS, KENYA_VEHICLES, buildSeedTrips } from './data/kenyaTransitData';
-import { auth, signInWithGoogle, signOutUser, testFirestoreConnection } from './firebase';
+import { auth, signOutUser, testFirestoreConnection } from './firebase';
 import {
   ensureUserProfile,
   isBootstrappedAdmin,
@@ -22,6 +23,30 @@ import {
 } from './services/firestoreService';
 import type { Booking, Parcel, Sacco, Trip, UserProfile, Vehicle } from './types';
 
+const LOCAL_BOOKING_REFS_KEY = 'msafiri_booking_refs_v1';
+const LOCAL_PARCEL_REFS_KEY = 'msafiri_parcel_refs_v1';
+
+function readStoredRefs(key: string): string[] {
+  try {
+    const raw = localStorage.getItem(key);
+    const parsed = raw ? JSON.parse(raw) : [];
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveStoredRef(key: string, ref: string): string[] {
+  const existing = readStoredRefs(key);
+  const next = Array.from(new Set([ref, ...existing])).slice(0, 50);
+  try {
+    localStorage.setItem(key, JSON.stringify(next));
+  } catch {
+    // Ignore storage quota errors
+  }
+  return next;
+}
+
 export default function App() {
   const [activePage, setActivePage] = useState<AppPage>('book');
   const [user, setUser] = useState<User | null>(null);
@@ -31,21 +56,40 @@ export default function App() {
   const [trips, setTrips] = useState<Trip[]>(() => buildSeedTrips());
   const [saccos, setSaccos] = useState<Sacco[]>(KENYA_SACCOS);
   const [vehicles, setVehicles] = useState<Vehicle[]>(KENYA_VEHICLES);
-  const [bookings, setBookings] = useState<Booking[]>([]);
-  const [parcels, setParcels] = useState<Parcel[]>([]);
+  const [fsBookings, setFsBookings] = useState<Booking[]>([]);
+  const [guestBookings, setGuestBookings] = useState<Booking[]>([]);
+  const [fsParcels, setFsParcels] = useState<Parcel[]>([]);
+  const [guestParcels, setGuestParcels] = useState<Parcel[]>([]);
   const [loadingTrips, setLoadingTrips] = useState(true);
 
   const [selectedTrip, setSelectedTrip] = useState<Trip | null>(null);
+  const [showAuthModal, setShowAuthModal] = useState(false);
   const [showAccountModal, setShowAccountModal] = useState(false);
-  const [authError, setAuthError] = useState<string | null>(null);
 
   const isAdmin = isBootstrappedAdmin(user);
 
-  // 1. Validate Firestore connectivity and subscribe to public transit catalog
+  const bookings = useMemo(() => {
+    const map = new Map<string, Booking>();
+    for (const b of guestBookings) map.set(b.id, b);
+    for (const b of fsBookings) map.set(b.id, b);
+    return Array.from(map.values()).sort((a, b) =>
+      `${b.departureDate} ${b.departureTime}`.localeCompare(
+        `${a.departureDate} ${a.departureTime}`
+      )
+    );
+  }, [fsBookings, guestBookings]);
+
+  const parcels = useMemo(() => {
+    const map = new Map<string, Parcel>();
+    for (const p of guestParcels) map.set(p.id, p);
+    for (const p of fsParcels) map.set(p.id, p);
+    return Array.from(map.values());
+  }, [fsParcels, guestParcels]);
+
+  // 1. Validate Firestore connectivity and load public catalog + any locally booked guest refs
   useEffect(() => {
     testFirestoreConnection();
 
-    // Load initial catalog from Express backend so visitors see live trips immediately
     fetch('/api/catalog')
       .then((r) => (r.ok ? r.json() : null))
       .then((data) => {
@@ -55,6 +99,26 @@ export default function App() {
       })
       .catch(() => {})
       .finally(() => setLoadingTrips(false));
+
+    const storedBookingRefs = readStoredRefs(LOCAL_BOOKING_REFS_KEY);
+    if (storedBookingRefs.length > 0) {
+      fetch(`/api/bookings?refs=${encodeURIComponent(storedBookingRefs.join(','))}`)
+        .then((r) => (r.ok ? r.json() : null))
+        .then((data) => {
+          if (data?.bookings) setGuestBookings(data.bookings);
+        })
+        .catch(() => {});
+    }
+
+    const storedParcelRefs = readStoredRefs(LOCAL_PARCEL_REFS_KEY);
+    if (storedParcelRefs.length > 0) {
+      fetch(`/api/parcels?refs=${encodeURIComponent(storedParcelRefs.join(','))}`)
+        .then((r) => (r.ok ? r.json() : null))
+        .then((data) => {
+          if (data?.parcels) setGuestParcels(data.parcels);
+        })
+        .catch(() => {});
+    }
 
     const unsubTrips = subscribeTrips(
       (fsTrips) => {
@@ -87,43 +151,80 @@ export default function App() {
       setUser(nextUser);
       setAuthReady(true);
       if (nextUser) {
-        try {
-          const userProf = await ensureUserProfile(nextUser);
-          setProfile(userProf);
-          if (isBootstrappedAdmin(nextUser)) {
-            await seedKenyanFleetIfAdmin(nextUser);
+        if (nextUser.emailVerified) {
+          try {
+            const userProf = await ensureUserProfile(nextUser);
+            setProfile(userProf);
+            if (isBootstrappedAdmin(nextUser)) {
+              await seedKenyanFleetIfAdmin(nextUser);
+            }
+          } catch {
+            // Handled via structured Firestore error logger
           }
-        } catch {
-          // Handled via structured Firestore error logger
+        } else {
+          setProfile({
+            uid: nextUser.uid,
+            displayName: nextUser.displayName || nextUser.email?.split('@')[0] || 'Passenger',
+            email: nextUser.email || '',
+            role: 'passenger',
+          });
         }
       } else {
         setProfile(null);
-        setBookings([]);
-        setParcels([]);
+        setFsBookings([]);
+        setFsParcels([]);
       }
     });
     return () => unsub();
   }, []);
 
-  // 3. Subscribe to user-scoped Bookings & Parcels once auth is ready
+  // 3. Subscribe to user-scoped Firestore Bookings & Parcels for verified users
   useEffect(() => {
-    if (!authReady || !user) return;
-    const unsubBookings = subscribeUserBookings(user, isAdmin, setBookings);
-    const unsubParcels = subscribeUserParcels(user, isAdmin, setParcels);
+    if (!authReady || !user || !user.emailVerified) return;
+    const unsubBookings = subscribeUserBookings(user, isAdmin, setFsBookings);
+    const unsubParcels = subscribeUserParcels(user, isAdmin, setFsParcels);
     return () => {
       unsubBookings();
       unsubParcels();
     };
   }, [authReady, user, isAdmin]);
 
-  const handleSignIn = async () => {
-    setAuthError(null);
-    try {
-      await signInWithGoogle();
-    } catch (err) {
-      setAuthError(
-        err instanceof Error ? err.message : 'Google Sign-In was cancelled or blocked.'
+  const handleBookingCompleted = (newBooking: Booking) => {
+    if (newBooking?.ticketRef) {
+      saveStoredRef(LOCAL_BOOKING_REFS_KEY, newBooking.ticketRef);
+      setGuestBookings((prev) => [newBooking, ...prev.filter((b) => b.id !== newBooking.id)]);
+      setTrips((prev) =>
+        prev.map((t) => {
+          if (t.id !== newBooking.tripId) return t;
+          const mergedSeats = Array.from(new Set([...t.bookedSeats, ...newBooking.seats]));
+          return {
+            ...t,
+            bookedSeats: mergedSeats,
+            availableSeats: Math.max(0, t.capacity - mergedSeats.length),
+          };
+        })
       );
+    }
+  };
+
+  const handleParcelCreated = (newParcel: Parcel) => {
+    if (newParcel?.waybillNo) {
+      saveStoredRef(LOCAL_PARCEL_REFS_KEY, newParcel.waybillNo);
+      setGuestParcels((prev) => [newParcel, ...prev.filter((p) => p.id !== newParcel.id)]);
+    }
+  };
+
+  const handleCancelGuestBooking = async (bookingId: string) => {
+    const res = await fetch(`/api/bookings/${encodeURIComponent(bookingId)}/cancel`, {
+      method: 'PATCH',
+    });
+    if (res.ok) {
+      const data = await res.json();
+      if (data?.booking) {
+        setGuestBookings((prev) =>
+          prev.map((b) => (b.id === bookingId ? data.booking : b))
+        );
+      }
     }
   };
 
@@ -134,23 +235,8 @@ export default function App() {
         onNavigate={setActivePage}
         user={user}
         onOpenAccount={() => setShowAccountModal(true)}
-        onSignIn={handleSignIn}
+        onSignIn={() => setShowAuthModal(true)}
       />
-
-      {authError && (
-        <div className="max-w-7xl mx-auto w-full px-4 sm:px-6 lg:px-8 pt-4">
-          <div className="p-3 text-xs text-red-800 bg-red-50 border border-red-200 rounded-lg flex items-center justify-between">
-            <span>{authError}</span>
-            <button
-              type="button"
-              onClick={() => setAuthError(null)}
-              className="font-semibold underline ml-4"
-            >
-              Dismiss
-            </button>
-          </div>
-        </div>
-      )}
 
       <main className="flex-1">
         {activePage === 'book' && (
@@ -170,13 +256,19 @@ export default function App() {
           <MyTicketsView
             user={user}
             bookings={bookings}
-            onSignIn={handleSignIn}
+            onSignIn={() => setShowAuthModal(true)}
             onJumpToBook={() => setActivePage('book')}
+            onCancelGuestBooking={handleCancelGuestBooking}
           />
         )}
 
         {activePage === 'parcel' && (
-          <ParcelView user={user} parcels={parcels} onSignIn={handleSignIn} />
+          <ParcelView
+            user={user}
+            parcels={parcels}
+            onSignIn={() => setShowAuthModal(true)}
+            onParcelCreated={handleParcelCreated}
+          />
         )}
 
         {activePage === 'operations' && (
@@ -188,7 +280,7 @@ export default function App() {
             vehicles={vehicles}
             bookings={bookings}
             parcels={parcels}
-            onSignIn={handleSignIn}
+            onSignIn={() => setShowAuthModal(true)}
           />
         )}
       </main>
@@ -240,12 +332,26 @@ export default function App() {
           trip={selectedTrip}
           user={user}
           profile={profile}
-          onClose={() => setSelectedTrip(null)}
-          onSignIn={handleSignIn}
-          onBookingCompleted={() => {
+          onClose={() => {
+            setSelectedTrip(null);
+          }}
+          onSignIn={async () => {
+            setShowAuthModal(true);
+          }}
+          onBookingCompleted={(newBooking) => {
+            handleBookingCompleted(newBooking);
+          }}
+          onViewTickets={() => {
             setSelectedTrip(null);
             setActivePage('tickets');
           }}
+        />
+      )}
+
+      {showAuthModal && (
+        <AuthModal
+          onClose={() => setShowAuthModal(false)}
+          onAuthenticated={() => setShowAuthModal(false)}
         />
       )}
 
