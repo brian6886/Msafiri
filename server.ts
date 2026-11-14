@@ -3,6 +3,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import express from 'express';
+import { GoogleGenAI } from '@google/genai';
 import { createServer as createViteServer } from 'vite';
 import {
   KENYA_CORRIDORS,
@@ -12,6 +13,9 @@ import {
 } from './src/data/kenyaTransitData.ts';
 import type {
   Booking,
+  LatLngPoint,
+  LiveTelemetryPoint,
+  MapsGroundingSource,
   MpesaStkResponse,
   NtsaPlateReport,
   Parcel,
@@ -36,8 +40,16 @@ const ADMIN_SESSION_SECRET = process.env.ADMIN_SESSION_SECRET || TICKET_SIGNING_
 interface StoredMpesaTx extends MpesaStkResponse {
   createdAtMs: number;
   lastQueriedAtMs?: number;
+  lastQueryRaw?: string;
   accountRef: string;
   b2cConversationId?: string;
+}
+
+interface LiveTrackOverride {
+  progress: number;
+  speedKmh: number;
+  paused?: boolean;
+  updatedAtMs: number;
 }
 
 interface ServerDb {
@@ -47,6 +59,206 @@ interface ServerDb {
   parcels: Parcel[];
   mpesaTransactions: Record<string, StoredMpesaTx>;
   verifiedScans: Array<{ ticketRef: string; verifiedAt: string; plateNumber: string }>;
+  liveTracking?: Record<string, LiveTrackOverride>;
+}
+
+const KENYA_TOWN_COORDS: Record<string, LatLngPoint> = {
+  Nairobi: { lat: -1.286389, lng: 36.817223 },
+  Mombasa: { lat: -4.043477, lng: 39.668206 },
+  Kisumu: { lat: -0.091702, lng: 34.767956 },
+  Nakuru: { lat: -0.303099, lng: 36.080026 },
+  Eldoret: { lat: 0.514277, lng: 35.26978 },
+  Nyeri: { lat: -0.416667, lng: 36.95 },
+  Nanyuki: { lat: 0.016667, lng: 37.0728 },
+  Kisii: { lat: -0.677334, lng: 34.779603 },
+  Kericho: { lat: -0.367742, lng: 35.283141 },
+  Naivasha: { lat: -0.717178, lng: 36.431026 },
+  'JKIA Airport': { lat: -1.319167, lng: 36.927778 },
+};
+
+const CORRIDOR_WAYPOINTS: Record<
+  string,
+  Array<{ name: string; lat: number; lng: number }>
+> = {
+  'Nairobi->Eldoret': [
+    { name: 'Moi Avenue Terminal, Nairobi', lat: -1.2833, lng: 36.8233 },
+    { name: 'Westlands & Kangemi A104', lat: -1.2647, lng: 36.7586 },
+    { name: 'Mai Mahiu / Viewpoint Escarpment', lat: -0.9858, lng: 36.5882 },
+    { name: 'Naivasha Highway Junction', lat: -0.7172, lng: 36.431 },
+    { name: 'Gilgil Weighbridge', lat: -0.4936, lng: 36.3175 },
+    { name: 'Nakuru Town Bypass', lat: -0.2896, lng: 36.066 },
+    { name: 'Salgaa Checkpoint', lat: -0.1755, lng: 35.8384 },
+    { name: 'Timboroa Summit', lat: 0.0686, lng: 35.5469 },
+    { name: 'Burnt Forest Stage', lat: 0.2143, lng: 35.4301 },
+    { name: 'Eldoret Main Stage', lat: 0.5143, lng: 35.2698 },
+  ],
+  'Nairobi->Nakuru': [
+    { name: 'Tea Room CBD, Nairobi', lat: -1.2819, lng: 36.8277 },
+    { name: 'Westlands Stage', lat: -1.2647, lng: 36.8019 },
+    { name: 'Limuru Uplands', lat: -1.1066, lng: 36.6425 },
+    { name: 'Naivasha Junction', lat: -0.7172, lng: 36.431 },
+    { name: 'Gilgil Stage', lat: -0.4936, lng: 36.3175 },
+    { name: 'Nakuru Main Stage', lat: -0.3031, lng: 36.08 },
+  ],
+  'Nairobi->Mombasa': [
+    { name: 'Railways Terminal CBD', lat: -1.2907, lng: 36.8273 },
+    { name: 'Mlolongo Expressway Gate', lat: -1.3944, lng: 36.9428 },
+    { name: 'Machakos Junction', lat: -1.5944, lng: 37.1394 },
+    { name: 'Sultan Hamud', lat: -2.0196, lng: 37.3672 },
+    { name: 'Mtito Andei Highway Stop', lat: -2.6897, lng: 38.1656 },
+    { name: 'Voi Town Terminal', lat: -3.3961, lng: 38.5561 },
+    { name: 'Mariakani Stage', lat: -3.8617, lng: 39.4733 },
+    { name: 'Mwembe Tayari Terminal, Mombasa', lat: -4.0547, lng: 39.6636 },
+  ],
+  'Nairobi->Kisumu': [
+    { name: 'Railways Terminal CBD', lat: -1.2907, lng: 36.8273 },
+    { name: 'Kikuyu Bypass', lat: -1.2464, lng: 36.6626 },
+    { name: 'Naivasha Highway', lat: -0.7172, lng: 36.431 },
+    { name: 'Nakuru West Bypass', lat: -0.2896, lng: 36.048 },
+    { name: 'Kericho Tea Highlands', lat: -0.3677, lng: 35.2831 },
+    { name: 'Ahero Junction', lat: -0.1753, lng: 34.9183 },
+    { name: 'Kisumu Jubilee Stage', lat: -0.0917, lng: 34.768 },
+  ],
+  'Nairobi->Nanyuki': [
+    { name: 'Tea Room CBD, Nairobi', lat: -1.2819, lng: 36.8277 },
+    { name: 'Thika Road Mall', lat: -1.2195, lng: 36.8891 },
+    { name: 'Kenol Highway Junction', lat: -0.9277, lng: 37.1277 },
+    { name: 'Karatina Stage', lat: -0.4833, lng: 37.1333 },
+    { name: 'Nyeri Town Stage', lat: -0.4167, lng: 36.95 },
+    { name: 'Nanyuki Main Stage', lat: 0.0167, lng: 37.0728 },
+  ],
+  'Nairobi->JKIA Airport': [
+    { name: 'Westlands Stage', lat: -1.2647, lng: 36.8019 },
+    { name: 'Museum Hill Expressway Toll', lat: -1.2743, lng: 36.8147 },
+    { name: 'Capital Centre Viaduct', lat: -1.3095, lng: 36.8351 },
+    { name: 'JKIA Terminal 1A', lat: -1.3192, lng: 36.9278 },
+  ],
+};
+
+function computeBearingDeg(a: LatLngPoint, b: LatLngPoint): number {
+  const toRad = (deg: number) => (deg * Math.PI) / 180;
+  const toDeg = (rad: number) => (rad * 180) / Math.PI;
+  const lat1 = toRad(a.lat);
+  const lat2 = toRad(b.lat);
+  const dLng = toRad(b.lng - a.lng);
+  const y = Math.sin(dLng) * Math.cos(lat2);
+  const x =
+    Math.cos(lat1) * Math.sin(lat2) -
+    Math.sin(lat1) * Math.cos(lat2) * Math.cos(dLng);
+  return Math.round((toDeg(Math.atan2(y, x)) + 360) % 360);
+}
+
+function getDurationMinutesEstimate(origin: string, destination: string): number {
+  const corridor = KENYA_CORRIDORS.find(
+    (c) =>
+      (c.origin.toLowerCase() === origin.toLowerCase() &&
+        c.destination.toLowerCase() === destination.toLowerCase()) ||
+      (c.destination.toLowerCase() === origin.toLowerCase() &&
+        c.origin.toLowerCase() === destination.toLowerCase())
+  );
+  if (!corridor) return 240;
+  return Math.round((corridor.distanceKm / 68) * 60);
+}
+
+function buildTripTelemetry(
+  trip: Trip,
+  db: ServerDb,
+  nowMs: number
+): LiveTelemetryPoint {
+  const key = `${trip.origin}->${trip.destination}`;
+  const fallbackOrigin = KENYA_TOWN_COORDS[trip.origin] || KENYA_TOWN_COORDS.Nairobi;
+  const fallbackDest = KENYA_TOWN_COORDS[trip.destination] || KENYA_TOWN_COORDS.Mombasa;
+  const waypoints = CORRIDOR_WAYPOINTS[key] || [
+    { name: trip.originStage, lat: fallbackOrigin.lat, lng: fallbackOrigin.lng },
+    { name: trip.destinationStage, lat: fallbackDest.lat, lng: fallbackDest.lng },
+  ];
+
+  const vehicle = (db.vehicles || KENYA_VEHICLES).find((v) => v.id === trip.vehicleId);
+  const driverName = vehicle?.driverName || 'Assigned SACCO Driver';
+  const override = db.liveTracking?.[trip.id];
+
+  // Calculate baseline deterministic progress so vehicles appear cleanly positioned on corridor
+  let progress = 0;
+  let speedKmh = 0;
+
+  if (override) {
+    if (override.paused || trip.status === 'Boarding' || trip.status === 'Scheduled') {
+      progress = Math.max(0, Math.min(1, override.progress));
+      speedKmh = trip.status === 'Departed' ? override.speedKmh : 0;
+    } else {
+      const elapsedSec = Math.max(0, (nowMs - override.updatedAtMs) / 1000);
+      progress = (override.progress + elapsedSec * 0.0022) % 0.96;
+      speedKmh = override.speedKmh;
+    }
+  } else if (trip.status === 'Arrived') {
+    progress = 1;
+    speedKmh = 0;
+  } else if (trip.status === 'Boarding') {
+    progress = 0.04;
+    speedKmh = 0;
+  } else if (trip.status === 'Departed') {
+    const hash = trip.id.split('').reduce((acc, ch) => acc + ch.charCodeAt(0), 0);
+    const phase = ((nowMs / 1000) * 0.0022 + (hash % 60) / 100) % 0.92;
+    progress = Math.max(0.08, phase);
+    speedKmh = 68 + Math.round(Math.sin(nowMs / 7000 + hash) * 5 + 5); // 68 - 78 km/h (NTSA <= 80)
+  } else {
+    // Scheduled — subtly staggered along staging / dispatch preview
+    const hash = trip.id.split('').reduce((acc, ch) => acc + ch.charCodeAt(0), 0);
+    const phase = ((nowMs / 1000) * 0.0014 + (hash % 75) / 100) % 0.85;
+    progress = Math.max(0.06, phase);
+    speedKmh = 64 + Math.round(Math.cos(nowMs / 9000 + hash) * 6 + 6); // 64 - 76 km/h (NTSA <= 80)
+  }
+
+  speedKmh = Math.min(80, Math.max(0, speedKmh));
+
+  const segments = Math.max(1, waypoints.length - 1);
+  const scaled = progress * segments;
+  const segIndex = Math.min(segments - 1, Math.floor(scaled));
+  const localT = scaled - segIndex;
+
+  const p1 = waypoints[segIndex];
+  const p2 = waypoints[Math.min(waypoints.length - 1, segIndex + 1)];
+
+  const currentCoords: LatLngPoint = {
+    lat: Number((p1.lat + (p2.lat - p1.lat) * localT).toFixed(6)),
+    lng: Number((p1.lng + (p2.lng - p1.lng) * localT).toFixed(6)),
+  };
+
+  const headingDeg = computeBearingDeg(
+    { lat: p1.lat, lng: p1.lng },
+    { lat: p2.lat, lng: p2.lng }
+  );
+  const totalEstMin = getDurationMinutesEstimate(trip.origin, trip.destination);
+  const etaMinutesRemaining = Math.max(
+    1,
+    Math.round(totalEstMin * (1 - progress))
+  );
+
+  return {
+    tripId: trip.id,
+    saccoName: trip.saccoName,
+    plateNumber: trip.plateNumber,
+    classTier: trip.classTier,
+    origin: trip.origin,
+    originStage: trip.originStage,
+    destination: trip.destination,
+    destinationStage: trip.destinationStage,
+    originCoords: { lat: waypoints[0].lat, lng: waypoints[0].lng },
+    destinationCoords: {
+      lat: waypoints[waypoints.length - 1].lat,
+      lng: waypoints[waypoints.length - 1].lng,
+    },
+    currentCoords,
+    speedKmh,
+    headingDeg,
+    progressPercent: Math.round(progress * 100),
+    currentSector: progress < 0.06 ? `Staging at ${waypoints[0].name}` : `En route near ${p1.name}`,
+    nextStage: p2.name,
+    status: trip.status,
+    etaMinutesRemaining,
+    driverName,
+    updatedAt: new Date(nowMs).toISOString(),
+  };
 }
 
 function ensureDb(): ServerDb {
@@ -159,9 +371,13 @@ function getDarajaConfig(reqHost?: string, reqProto?: string) {
     (process.env.APP_URL || '').trim().replace(/\/$/, '') ||
     (reqHost ? `${reqProto || 'https'}://${reqHost}` : '');
 
+  const rawCallback = (process.env.MPESA_CALLBACK_URL || '').trim();
   const callbackUrl =
-    (process.env.MPESA_CALLBACK_URL || '').trim() ||
-    (originBase ? `${originBase}/api/mpesa/callback` : '');
+    rawCallback && rawCallback.includes('/api/mpesa/callback')
+      ? rawCallback
+      : originBase
+      ? `${originBase}/api/mpesa/callback`
+      : rawCallback;
 
   const missingVars: string[] = [];
   if (!consumerKey) missingVars.push('MPESA_CONSUMER_KEY');
@@ -202,26 +418,41 @@ function getKenyanTimestamp(): string {
   return `${yyyy}${mm}${dd}${hh}${min}${ss}`;
 }
 
+const cachedOAuthTokens = new Map<string, { token: string; expiresAtMs: number }>();
+
 async function fetchDarajaAccessToken(
   baseUrl: string,
   consumerKey: string,
   consumerSecret: string
 ): Promise<string> {
+  const cacheKey = `${baseUrl}:${consumerKey.slice(0, 8)}`;
+  const cached = cachedOAuthTokens.get(cacheKey);
+  if (cached && cached.expiresAtMs > Date.now() + 60_000) {
+    return cached.token;
+  }
+
   const basicAuth = Buffer.from(`${consumerKey}:${consumerSecret}`).toString('base64');
   const res = await fetch(`${baseUrl}/oauth/v1/generate?grant_type=client_credentials`, {
     method: 'GET',
     headers: {
       Authorization: `Basic ${basicAuth}`,
+      Accept: 'application/json',
+      'User-Agent': 'MsafiriKenya/1.0 (+https://safaricom.co.ke)',
     },
   });
   const text = await res.text();
   if (!res.ok) {
-    throw new Error(`Daraja OAuth failed (${res.status}): ${text}`);
+    throw new Error(`Daraja OAuth failed (${res.status}): ${text.slice(0, 180)}`);
   }
-  const json = JSON.parse(text) as { access_token?: string };
+  const json = JSON.parse(text) as { access_token?: string; expires_in?: string | number };
   if (!json.access_token) {
     throw new Error('Daraja OAuth response did not include access_token.');
   }
+  const ttlSec = Math.max(120, Number(json.expires_in || 3599));
+  cachedOAuthTokens.set(cacheKey, {
+    token: json.access_token,
+    expiresAtMs: Date.now() + ttlSec * 1000,
+  });
   return json.access_token;
 }
 
@@ -412,6 +643,177 @@ async function startServer() {
     });
   });
 
+  app.get('/api/maps/config', (_req, res) => {
+    const apiKey = (
+      process.env.VITE_GOOGLE_MAPS_API_KEY ||
+      process.env.GOOGLE_MAPS_API_KEY ||
+      ''
+    ).trim();
+    res.json({
+      configured: Boolean(apiKey),
+      apiKey,
+    });
+  });
+
+  app.get('/api/tracking/live', (req, res) => {
+    const db = ensureDb();
+    const tripIdParam = String(req.query.tripId || '').trim();
+    const nowMs = Date.now();
+    const activeTrips = db.trips.filter((t) => t.status !== 'Cancelled');
+    const filtered = tripIdParam
+      ? activeTrips.filter((t) => t.id === tripIdParam)
+      : activeTrips;
+    const telemetry = filtered.map((trip) => buildTripTelemetry(trip, db, nowMs));
+    res.json({
+      telemetry,
+      updatedAt: new Date(nowMs).toISOString(),
+    });
+  });
+
+  app.post('/api/tracking/update', requireAdminSession, (req, res) => {
+    const { tripId, progressPercent, speedKmh, status } = req.body as {
+      tripId?: string;
+      progressPercent?: number;
+      speedKmh?: number;
+      status?: Trip['status'];
+    };
+    if (!tripId) {
+      res.status(400).json({ error: 'tripId is required.' });
+      return;
+    }
+    const db = ensureDb();
+    const tripIdx = db.trips.findIndex((t) => t.id === tripId);
+    if (tripIdx === -1) {
+      res.status(404).json({ error: 'Trip not found.' });
+      return;
+    }
+    if (status) {
+      db.trips[tripIdx] = { ...db.trips[tripIdx], status };
+    }
+    const clampedProgress =
+      typeof progressPercent === 'number'
+        ? Math.max(0, Math.min(1, progressPercent / 100))
+        : 0.35;
+    const governedSpeed =
+      typeof speedKmh === 'number' ? Math.max(0, Math.min(80, Math.round(speedKmh))) : 74;
+
+    db.liveTracking = db.liveTracking || {};
+    db.liveTracking[tripId] = {
+      progress: clampedProgress,
+      speedKmh: governedSpeed,
+      updatedAtMs: Date.now(),
+    };
+    saveDb(db);
+    const point = buildTripTelemetry(db.trips[tripIdx], db, Date.now());
+    res.json({ telemetry: point, trip: db.trips[tripIdx] });
+  });
+
+  app.post('/api/maps/grounding', async (req, res) => {
+    const { query, lat, lng, origin, destination } = req.body as {
+      query?: string;
+      lat?: number;
+      lng?: number;
+      origin?: string;
+      destination?: string;
+    };
+
+    const cleanQuery = String(query || '').trim();
+    if (!cleanQuery) {
+      res.status(400).json({ error: 'Query is required.' });
+      return;
+    }
+
+    const geminiApiKey = (process.env.GEMINI_API_KEY || '').trim();
+    if (!geminiApiKey) {
+      res.status(503).json({
+        error: 'GEMINI_API_KEY is not configured on the server.',
+      });
+      return;
+    }
+
+    try {
+      const ai = new GoogleGenAI({
+        apiKey: geminiApiKey,
+        httpOptions: { headers: { 'User-Agent': 'aistudio-build' } },
+      });
+
+      const corridorContext =
+        origin && destination
+          ? `Context: Kenyan intercity PSV matatu corridor from ${origin} to ${destination}. `
+          : 'Context: Kenyan intercity PSV matatu terminals, highway stages, and commuter stops. ';
+
+      const hasCoords =
+        typeof lat === 'number' &&
+        typeof lng === 'number' &&
+        Number.isFinite(lat) &&
+        Number.isFinite(lng);
+
+      const response = await ai.models.generateContent({
+        model: 'gemini-4-hydrogen',
+        contents: `${corridorContext}${cleanQuery}`,
+        config: {
+          tools: [{ googleMaps: {} }],
+          ...(hasCoords
+            ? {
+                toolConfig: {
+                  retrievalConfig: {
+                    latLng: { latitude: lat as number, longitude: lng as number },
+                  },
+                },
+              }
+            : {}),
+        },
+      });
+
+      const candidate = response.candidates?.[0];
+      const rawChunks =
+        (candidate?.groundingMetadata?.groundingChunks as
+          | Array<{
+              maps?: {
+                uri?: string;
+                title?: string;
+                placeAnswerSources?: {
+                  reviewSnippets?: Array<{ content?: string }>;
+                };
+              };
+            }>
+          | undefined) || [];
+
+      const sources: MapsGroundingSource[] = [];
+      const seenUris = new Set<string>();
+
+      for (const chunk of rawChunks) {
+        const uri = chunk?.maps?.uri;
+        const title = chunk?.maps?.title;
+        if (!uri || seenUris.has(uri)) continue;
+        seenUris.add(uri);
+        const snippets =
+          chunk.maps?.placeAnswerSources?.reviewSnippets
+            ?.map((s) => s.content?.trim())
+            .filter((s): s is string => Boolean(s)) || [];
+        sources.push({
+          title: title || 'View on Google Maps',
+          uri,
+          reviewSnippets: snippets.length > 0 ? snippets : undefined,
+        });
+      }
+
+      res.json({
+        text: response.text || 'No place insights returned for this corridor query.',
+        sources,
+      });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Maps grounding request failed.';
+      const isQuota =
+        msg.includes('429') || msg.includes('RESOURCE_EXHAUSTED') || msg.includes('Quota');
+      res.status(isQuota ? 429 : 502).json({
+        error: isQuota
+          ? 'Google Maps grounding quota exceeded. Please try again shortly or switch to your own Gemini API key.'
+          : msg,
+      });
+    }
+  });
+
   app.get('/api/mpesa/config-status', (req, res) => {
     const cfg = getDarajaConfig(req.get('host'), req.protocol);
     res.json({
@@ -550,6 +952,87 @@ async function startServer() {
     res.json({ vehicle: list[idx] });
   });
 
+  app.post('/api/admin/vehicles', requireAdminSession, (req, res) => {
+    const body = req.body as Partial<typeof KENYA_VEHICLES[number]>;
+    const plateNumber = String(body.plateNumber || '')
+      .trim()
+      .toUpperCase()
+      .replace(/\s+/g, ' ');
+    const model = String(body.model || '').trim();
+    const driverName = String(body.driverName || '').trim();
+    const saccoId = String(body.saccoId || '').trim();
+    const classTier = body.classTier;
+
+    if (plateNumber.length < 6 || plateNumber.length > 12) {
+      res.status(400).json({ error: 'Enter a valid Kenyan PSV plate (e.g. KDP 312Z).' });
+      return;
+    }
+    if (!model || !driverName || !saccoId) {
+      res.status(400).json({ error: 'SACCO, vehicle model, and driver name are required.' });
+      return;
+    }
+    if (
+      classTier !== 'Executive 11' &&
+      classTier !== 'Standard 14' &&
+      classTier !== 'VIP Coach 33'
+    ) {
+      res.status(400).json({ error: 'Invalid vehicle class tier.' });
+      return;
+    }
+
+    const db = ensureDb();
+    const list = db.vehicles || [...KENYA_VEHICLES];
+    const duplicate = list.some(
+      (v) => v.plateNumber.replace(/\s+/g, '') === plateNumber.replace(/\s+/g, '')
+    );
+    if (duplicate) {
+      res.status(409).json({ error: `Vehicle ${plateNumber} is already registered in the fleet.` });
+      return;
+    }
+
+    const capacity =
+      typeof body.capacity === 'number' && body.capacity >= 7 && body.capacity <= 65
+        ? Math.round(body.capacity)
+        : classTier === 'Executive 11'
+        ? 11
+        : classTier === 'VIP Coach 33'
+        ? 33
+        : 14;
+
+    const newVehicle: typeof KENYA_VEHICLES[number] = {
+      id: body.id && /^[a-zA-Z0-9_-]+$/.test(body.id) ? body.id : `veh_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+      saccoId,
+      plateNumber,
+      model,
+      capacity,
+      classTier,
+      ntsaExpiry: String(body.ntsaExpiry || '2027-12-31').trim(),
+      speedGovernorStatus: body.speedGovernorStatus || 'Calibrated 80km/h',
+      driverName,
+      status: body.status || 'Active',
+    };
+
+    list.unshift(newVehicle);
+    db.vehicles = list;
+    saveDb(db);
+    res.json({ vehicle: newVehicle, vehicles: list });
+  });
+
+  app.delete('/api/admin/vehicles/:id', requireAdminSession, (req, res) => {
+    const { id } = req.params;
+    const db = ensureDb();
+    const list = db.vehicles || [...KENYA_VEHICLES];
+    const idx = list.findIndex((v) => v.id === id);
+    if (idx === -1) {
+      res.status(404).json({ error: 'Vehicle not found in registered fleet.' });
+      return;
+    }
+    const [removed] = list.splice(idx, 1);
+    db.vehicles = list;
+    saveDb(db);
+    res.json({ deletedId: removed.id, vehicles: list });
+  });
+
   app.get('/api/catalog', (_req, res) => {
     const db = ensureDb();
     res.json({
@@ -677,6 +1160,8 @@ async function startServer() {
         headers: {
           Authorization: `Bearer ${accessToken}`,
           'Content-Type': 'application/json',
+          Accept: 'application/json',
+          'User-Agent': 'MsafiriKenya/1.0 (+https://safaricom.co.ke)',
         },
         body: JSON.stringify(stkPayload),
       });
@@ -829,7 +1314,7 @@ async function startServer() {
     if (tx.status === 'PENDING') {
       const cfg = getDarajaConfig(req.get('host'), req.protocol);
       const nowMs = Date.now();
-      if (cfg.configured && (!tx.lastQueriedAtMs || nowMs - tx.lastQueriedAtMs >= 2500)) {
+      if (cfg.configured && (!tx.lastQueriedAtMs || nowMs - tx.lastQueriedAtMs >= 5000)) {
         tx.lastQueriedAtMs = nowMs;
         try {
           const accessToken = await fetchDarajaAccessToken(
@@ -846,6 +1331,8 @@ async function startServer() {
             headers: {
               Authorization: `Bearer ${accessToken}`,
               'Content-Type': 'application/json',
+              Accept: 'application/json',
+              'User-Agent': 'MsafiriKenya/1.0 (+https://safaricom.co.ke)',
             },
             body: JSON.stringify({
               BusinessShortCode: cfg.shortcode,
@@ -855,8 +1342,11 @@ async function startServer() {
             }),
           });
 
+          const qRawText = await queryRes.text();
+          tx.lastQueryRaw = `${queryRes.status}: ${qRawText}`;
+
           if (queryRes.ok) {
-            const qJson = (await queryRes.json()) as {
+            const qJson = JSON.parse(qRawText) as {
               ResultCode?: string | number;
               ResultDesc?: string;
             };
@@ -878,6 +1368,7 @@ async function startServer() {
                     settlementPhone: latestTx.settlementPhone,
                     b2cForwardStatus: latestTx.b2cForwardStatus,
                     completedAt: latestTx.completedAt,
+                    lastQueryRaw: latestTx.lastQueryRaw,
                   });
                   return;
                 }
@@ -892,8 +1383,8 @@ async function startServer() {
               }
             }
           }
-        } catch {
-          // Keep PENDING while Safaricom processes PIN entry
+        } catch (err) {
+          tx.lastQueryRaw = err instanceof Error ? err.message : 'Query error';
         }
         db.mpesaTransactions[checkoutRequestId] = tx;
         saveDb(db);
@@ -913,6 +1404,7 @@ async function startServer() {
       settlementPhone: tx.settlementPhone,
       b2cForwardStatus: tx.b2cForwardStatus,
       completedAt: tx.completedAt,
+      lastQueryRaw: tx.lastQueryRaw,
     });
   });
 
@@ -1131,6 +1623,77 @@ async function startServer() {
       return;
     }
     res.json({ parcels: db.parcels });
+  });
+
+  app.get('/api/parcels/track/:waybillNo', (req, res) => {
+    const cleanWaybill = String(req.params.waybillNo || '').trim().toUpperCase();
+    if (!cleanWaybill) {
+      res.status(400).json({ error: 'Waybill number is required.' });
+      return;
+    }
+
+    const db = ensureDb();
+    const parcel = db.parcels.find(
+      (p) => p.waybillNo.toUpperCase() === cleanWaybill
+    );
+
+    if (!parcel) {
+      res.status(404).json({
+        error: `No parcel found with waybill ${cleanWaybill}. Verify the code on your receipt.`,
+      });
+      return;
+    }
+
+    const key = `${parcel.originCity}->${parcel.destinationCity}`;
+    const waypoints = CORRIDOR_WAYPOINTS[key];
+    const originCoords = KENYA_TOWN_COORDS[parcel.originCity] || KENYA_TOWN_COORDS.Nairobi;
+    const destCoords = KENYA_TOWN_COORDS[parcel.destinationCity] || KENYA_TOWN_COORDS.Mombasa;
+
+    let lastKnownLocation = `${parcel.originCity} ${parcel.saccoName} Parcel Office`;
+    let highwayCheckpoint = `${parcel.originCity} Terminal Dispatch Desk`;
+    let currentCoords: LatLngPoint = originCoords;
+
+    if (parcel.status === 'Booked') {
+      lastKnownLocation = `${parcel.originCity} — ${parcel.saccoName} Parcel Bay`;
+      highwayCheckpoint = 'Awaiting next scheduled departure manifest';
+      currentCoords = waypoints?.[0] ? { lat: waypoints[0].lat, lng: waypoints[0].lng } : originCoords;
+    } else if (parcel.status === 'In Transit') {
+      const midIdx = waypoints ? Math.max(1, Math.floor(waypoints.length / 2)) : 0;
+      const midPoint = waypoints?.[midIdx];
+      lastKnownLocation = midPoint
+        ? `${midPoint.name} (${parcel.originCity}–${parcel.destinationCity} Corridor)`
+        : `En route between ${parcel.originCity} and ${parcel.destinationCity}`;
+      highwayCheckpoint = `In luggage bay · Heading toward ${parcel.destinationCity}`;
+      currentCoords = midPoint ? { lat: midPoint.lat, lng: midPoint.lng } : originCoords;
+    } else if (parcel.status === 'Ready for Pickup') {
+      const lastPoint = waypoints?.[waypoints.length - 1];
+      lastKnownLocation = `${parcel.destinationCity} — ${parcel.saccoName} Collection Counter`;
+      highwayCheckpoint = lastPoint ? lastPoint.name : `${parcel.destinationCity} Central Stage`;
+      currentCoords = lastPoint ? { lat: lastPoint.lat, lng: lastPoint.lng } : destCoords;
+    } else if (parcel.status === 'Collected') {
+      const lastPoint = waypoints?.[waypoints.length - 1];
+      lastKnownLocation = `${parcel.destinationCity} — Handed over to ${parcel.recipientName}`;
+      highwayCheckpoint = 'Recipient signature & ID verified at SACCO desk';
+      currentCoords = lastPoint ? { lat: lastPoint.lat, lng: lastPoint.lng } : destCoords;
+    } else if (parcel.status === 'Cancelled') {
+      lastKnownLocation = `${parcel.originCity} — Waybill Cancelled`;
+      highwayCheckpoint = 'Dispatch cancelled prior to departure';
+      currentCoords = originCoords;
+    }
+
+    res.json({
+      waybillNo: parcel.waybillNo,
+      originCity: parcel.originCity,
+      destinationCity: parcel.destinationCity,
+      saccoName: parcel.saccoName,
+      description: parcel.description,
+      weightKg: parcel.weightKg,
+      status: parcel.status,
+      lastKnownLocation,
+      highwayCheckpoint,
+      currentCoords,
+      updatedAt: new Date().toISOString(),
+    });
   });
 
   if (process.env.NODE_ENV !== 'production') {

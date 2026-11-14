@@ -3,6 +3,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { AccountModal } from './components/AccountModal';
 import { AuthModal } from './components/AuthModal';
 import { BookingView } from './components/BookingView';
+import { LiveTrackingView } from './components/LiveTrackingView';
 import { MyTicketsView } from './components/MyTicketsView';
 import { Navbar, type AppPage } from './components/Navbar';
 import { OperationsView } from './components/OperationsView';
@@ -64,12 +65,20 @@ export default function App() {
   const [loadingTrips, setLoadingTrips] = useState(true);
 
   const [selectedTrip, setSelectedTrip] = useState<Trip | null>(null);
+  const [trackedTripId, setTrackedTripId] = useState<string | null>(null);
   const [showAuthModal, setShowAuthModal] = useState(false);
   const [showAccountModal, setShowAccountModal] = useState(false);
   const [adminSessionEmail, setAdminSessionEmail] = useState<string | null>(null);
+  const [quotaExceeded, setQuotaExceeded] = useState(false);
 
   const hasAdminSession = adminSessionEmail === ADMIN_EMAIL;
   const isAdmin = isBootstrappedAdmin(user) || hasAdminSession;
+
+  useEffect(() => {
+    const handleQuotaExceeded = () => setQuotaExceeded(true);
+    window.addEventListener('gmp-quota-exceeded', handleQuotaExceeded);
+    return () => window.removeEventListener('gmp-quota-exceeded', handleQuotaExceeded);
+  }, []);
 
   const bookings = useMemo(() => {
     const map = new Map<string, Booking>();
@@ -100,8 +109,8 @@ export default function App() {
             bookings?: Booking[];
             parcels?: Parcel[];
           };
-          if (data.trips?.length) setTrips(data.trips);
-          if (data.vehicles?.length) setVehicles(data.vehicles);
+          if (Array.isArray(data.trips)) setTrips(data.trips);
+          if (Array.isArray(data.vehicles)) setVehicles(data.vehicles);
           if (data.bookings) setGuestBookings(data.bookings);
           if (data.parcels) setGuestParcels(data.parcels);
         }
@@ -123,8 +132,8 @@ export default function App() {
         }
         if (cRes.ok) {
           const cData = (await cRes.json()) as { trips?: Trip[]; vehicles?: Vehicle[] };
-          if (cData.trips?.length) setTrips(cData.trips);
-          if (cData.vehicles?.length) setVehicles(cData.vehicles);
+          if (Array.isArray(cData.trips)) setTrips(cData.trips);
+          if (Array.isArray(cData.vehicles)) setVehicles(cData.vehicles);
         }
       }
     } catch {
@@ -307,8 +316,28 @@ export default function App() {
     }
   };
 
+  const handleTrackTrip = (tripId: string) => {
+    setTrackedTripId(tripId);
+    setActivePage('track');
+  };
+
   return (
     <div className="min-h-screen flex flex-col bg-slate-50 text-slate-900">
+      {quotaExceeded && (
+        <div className="bg-amber-600 text-white px-4 py-2 text-center text-sm font-medium sticky top-0 z-50">
+          Demo API quota exceeded.{' '}
+          <a
+            href="https://developers.google.com/maps/ai/ai-studio?utm_campaign=gmp_mcp_codeassist_v1_aistudio#quota_exceeded_errors"
+            className="underline font-bold"
+            target="_blank"
+            rel="noopener noreferrer"
+          >
+            Upgrade to your own key
+          </a>{' '}
+          to continue using Maps features.
+        </div>
+      )}
+
       <Navbar
         activePage={activePage}
         onNavigate={(page) => {
@@ -329,11 +358,22 @@ export default function App() {
             isLoading={loadingTrips}
             onSelectTrip={(trip) => setSelectedTrip(trip)}
             onExploreRoutes={() => setActivePage('routes')}
+            onTrackTrip={handleTrackTrip}
           />
         )}
 
         {activePage === 'routes' && (
           <RoutesView onJumpToBook={() => setActivePage('book')} />
+        )}
+
+        {activePage === 'track' && (
+          <LiveTrackingView
+            trips={trips}
+            initialTripId={trackedTripId}
+            isAdmin={isAdmin}
+            hasAdminSession={hasAdminSession}
+            onSelectTripForBooking={(trip) => setSelectedTrip(trip)}
+          />
         )}
 
         {activePage === 'tickets' && (
@@ -343,6 +383,7 @@ export default function App() {
             onSignIn={() => setShowAuthModal(true)}
             onJumpToBook={() => setActivePage('book')}
             onCancelGuestBooking={handleCancelGuestBooking}
+            onTrackTrip={handleTrackTrip}
           />
         )}
 
@@ -395,6 +436,13 @@ export default function App() {
               className="hover:text-slate-900"
             >
               Corridors
+            </button>
+            <button
+              type="button"
+              onClick={() => setActivePage('track')}
+              className="hover:text-slate-900"
+            >
+              Live Tracking
             </button>
             <button
               type="button"

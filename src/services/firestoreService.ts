@@ -1,5 +1,6 @@
 import {
   collection,
+  deleteDoc,
   doc,
   getDoc,
   getDocs,
@@ -328,3 +329,26 @@ export async function updateVehicleStatusAdmin(
     handleFirestoreError(error, OperationType.UPDATE, path);
   }
 }
+
+export async function createVehicleAdmin(vehicle: Vehicle): Promise<void> {
+  const path = `vehicles/${vehicle.id}`;
+  try {
+    await setDoc(doc(db, 'vehicles', vehicle.id), {
+      ...vehicle,
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+    });
+  } catch (error) {
+    handleFirestoreError(error, OperationType.CREATE, path);
+  }
+}
+
+export async function deleteVehicleAdmin(vehicleId: string): Promise<void> {
+  const path = `vehicles/${vehicleId}`;
+  try {
+    await deleteDoc(doc(db, 'vehicles', vehicleId));
+  } catch (error) {
+    handleFirestoreError(error, OperationType.DELETE, path);
+  }
+}
+

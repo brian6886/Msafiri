@@ -171,3 +171,58 @@ export interface NtsaPlateReport {
   tlbLicenseNo: string;
   insuranceClass: string;
 }
+
+export interface LatLngPoint {
+  lat: number;
+  lng: number;
+}
+
+export interface LiveTelemetryPoint {
+  tripId: string;
+  saccoName: string;
+  plateNumber: string;
+  classTier: VehicleClassTier;
+  origin: string;
+  originStage: string;
+  destination: string;
+  destinationStage: string;
+  originCoords: LatLngPoint;
+  destinationCoords: LatLngPoint;
+  currentCoords: LatLngPoint;
+  speedKmh: number;
+  headingDeg: number;
+  progressPercent: number;
+  currentSector: string;
+  nextStage: string;
+  status: TripStatus;
+  etaMinutesRemaining: number;
+  driverName: string;
+  updatedAt: string;
+}
+
+export interface MapsGroundingSource {
+  title: string;
+  uri: string;
+  reviewSnippets?: string[];
+}
+
+export interface MapsGroundingResponse {
+  text: string;
+  sources: MapsGroundingSource[];
+}
+
+export interface ParcelTrackingResult {
+  waybillNo: string;
+  originCity: string;
+  destinationCity: string;
+  saccoName: string;
+  description: string;
+  weightKg: number;
+  status: ParcelStatus;
+  lastKnownLocation: string;
+  highwayCheckpoint: string;
+  currentCoords?: LatLngPoint;
+  updatedAt: string;
+}
+
+

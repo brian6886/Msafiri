@@ -1,4 +1,4 @@
-import { ArrowRight, Search, Users } from 'lucide-react';
+import { ArrowRight, Navigation, Search, Users } from 'lucide-react';
 import React, { useMemo, useState } from 'react';
 import { KENYA_TOWNS, getDefaultTravelDate } from '../data/kenyaTransitData';
 import type { Trip, VehicleClassTier } from '../types';
@@ -8,6 +8,7 @@ interface BookingViewProps {
   isLoading: boolean;
   onSelectTrip: (trip: Trip) => void;
   onExploreRoutes: () => void;
+  onTrackTrip?: (tripId: string) => void;
 }
 
 export const BookingView: React.FC<BookingViewProps> = ({
@@ -15,6 +16,7 @@ export const BookingView: React.FC<BookingViewProps> = ({
   isLoading,
   onSelectTrip,
   onExploreRoutes,
+  onTrackTrip,
 }) => {
   const [originFilter, setOriginFilter] = useState<string>('All');
   const [destinationFilter, setDestinationFilter] = useState<string>('All');
@@ -306,14 +308,28 @@ export const BookingView: React.FC<BookingViewProps> = ({
                     </p>
                   </div>
 
-                  <button
-                    type="button"
-                    disabled={trip.availableSeats === 0}
-                    onClick={() => onSelectTrip(trip)}
-                    className="px-5 py-2.5 text-sm font-semibold text-white bg-emerald-700 hover:bg-emerald-800 disabled:bg-slate-300 disabled:cursor-not-allowed rounded-lg transition-colors whitespace-nowrap shrink-0"
-                  >
-                    {trip.availableSeats === 0 ? 'Full' : 'Select Seats'}
-                  </button>
+                  <div className="flex items-center gap-2 shrink-0">
+                    {onTrackTrip && (
+                      <button
+                        type="button"
+                        onClick={() => onTrackTrip(trip.id)}
+                        className="px-3 py-2.5 text-xs font-semibold text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-lg transition-colors inline-flex items-center gap-1.5 whitespace-nowrap shrink-0"
+                        title="Track live vehicle location on Google Maps"
+                      >
+                        <Navigation className="w-3.5 h-3.5 text-emerald-700" />
+                        Track
+                      </button>
+                    )}
+
+                    <button
+                      type="button"
+                      disabled={trip.availableSeats === 0}
+                      onClick={() => onSelectTrip(trip)}
+                      className="px-5 py-2.5 text-sm font-semibold text-white bg-emerald-700 hover:bg-emerald-800 disabled:bg-slate-300 disabled:cursor-not-allowed rounded-lg transition-colors whitespace-nowrap shrink-0"
+                    >
+                      {trip.availableSeats === 0 ? 'Full' : 'Select Seats'}
+                    </button>
+                  </div>
                 </div>
               </article>
             ))}

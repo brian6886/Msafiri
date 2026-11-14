@@ -1,5 +1,5 @@
 import type { User } from 'firebase/auth';
-import { Printer, Ticket, XCircle } from 'lucide-react';
+import { Navigation, Printer, Ticket, XCircle } from 'lucide-react';
 import { QRCodeSVG } from 'qrcode.react';
 import React, { useState } from 'react';
 import { updateBookingStatus } from '../services/firestoreService';
@@ -11,6 +11,7 @@ interface MyTicketsViewProps {
   onSignIn: () => void;
   onJumpToBook: () => void;
   onCancelGuestBooking: (bookingId: string) => Promise<void>;
+  onTrackTrip?: (tripId: string) => void;
 }
 
 export const MyTicketsView: React.FC<MyTicketsViewProps> = ({
@@ -19,6 +20,7 @@ export const MyTicketsView: React.FC<MyTicketsViewProps> = ({
   onSignIn,
   onJumpToBook,
   onCancelGuestBooking,
+  onTrackTrip,
 }) => {
   const [busyId, setBusyId] = useState<string | null>(null);
 
@@ -191,7 +193,17 @@ export const MyTicketsView: React.FC<MyTicketsViewProps> = ({
                   </div>
 
                   {b.status === 'Confirmed' && (
-                    <div className="pt-2 no-print">
+                    <div className="pt-2 flex flex-wrap items-center gap-4 no-print">
+                      {onTrackTrip && (
+                        <button
+                          type="button"
+                          onClick={() => onTrackTrip(b.tripId)}
+                          className="text-xs font-semibold text-emerald-700 hover:text-emerald-800 inline-flex items-center gap-1.5"
+                        >
+                          <Navigation className="w-3.5 h-3.5" />
+                          Track Live Matatu
+                        </button>
+                      )}
                       <button
                         type="button"
                         disabled={busyId === b.id}

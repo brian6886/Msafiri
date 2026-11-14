@@ -120,7 +120,7 @@ export const SeatMapModal: React.FC<SeatMapModalProps> = ({
   const [passengerName, setPassengerName] = useState<string>(
     profile?.displayName || user?.displayName || ''
   );
-  const [mpesaPhone, setMpesaPhone] = useState<string>(profile?.phone || '07');
+  const [mpesaPhone, setMpesaPhone] = useState<string>(profile?.phone || '');
   const [stage, setStage] = useState<'select' | 'stk_pending' | 'success'>('select');
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [stkInfo, setStkInfo] = useState<MpesaStkResponse | null>(null);
@@ -189,10 +189,10 @@ export const SeatMapModal: React.FC<SeatMapModalProps> = ({
 
       setStkInfo(pushData as MpesaStkResponse);
 
-      // Poll Daraja callback / stkpushquery status for up to 60s while user enters M-Pesa PIN
+      // Poll Daraja callback / stkpushquery status every 5s (respecting Daraja SpikeArrest rate limits)
       let completedTx: MpesaStkResponse | null = null;
-      for (let attempt = 0; attempt < 30; attempt += 1) {
-        await new Promise((r) => setTimeout(r, 2000));
+      for (let attempt = 0; attempt < 15; attempt += 1) {
+        await new Promise((r) => setTimeout(r, 5000));
         const statusRes = await fetch(`/api/mpesa/status/${pushData.checkoutRequestId}`);
         const statusData = (await statusRes.json()) as MpesaStkResponse;
         if (statusData.status === 'COMPLETED' && statusData.mpesaReceipt) {
@@ -207,8 +207,11 @@ export const SeatMapModal: React.FC<SeatMapModalProps> = ({
       }
 
       if (!completedTx || !completedTx.mpesaReceipt) {
+        const isSandbox = pushData.darajaMode === 'sandbox';
         throw new Error(
-          'M-Pesa confirmation timed out before PIN entry completed. Please retry.'
+          isSandbox
+            ? `Safaricom Daraja Sandbox accepted CheckoutRequestID ${pushData.checkoutRequestId}, but Sandbox (Paybill 174379) does not push live SIM popups to real phones unless MPESA_ENV is set to production with Go-Live credentials.`
+            : 'M-Pesa confirmation timed out before PIN entry completed. Please retry.'
         );
       }
 
@@ -320,9 +323,17 @@ export const SeatMapModal: React.FC<SeatMapModalProps> = ({
               PIN on your handset.
             </p>
             {stkInfo && (
-              <p className="text-xs font-mono text-slate-500">
-                Request ID: {stkInfo.checkoutRequestId}
-              </p>
+              <div className="space-y-1">
+                <p className="text-xs font-mono text-slate-500">
+                  Request ID: {stkInfo.checkoutRequestId} · Mode: {stkInfo.darajaMode}
+                </p>
+                {stkInfo.darajaMode === 'sandbox' && (
+                  <p className="text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded-lg p-2.5 max-w-md mx-auto">
+                    Running in Safaricom Daraja Sandbox (174379). Real SIM Toolkit popups on live
+                    phones require Production Go-Live credentials (MPESA_ENV=production).
+                  </p>
+                )}
+              </div>
             )}
           </div>
         )}

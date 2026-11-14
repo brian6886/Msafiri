@@ -1,7 +1,7 @@
 import type { User } from 'firebase/auth';
 import React from 'react';
 
-export type AppPage = 'book' | 'routes' | 'tickets' | 'parcel' | 'operations';
+export type AppPage = 'book' | 'routes' | 'track' | 'tickets' | 'parcel' | 'operations';
 
 interface NavbarProps {
   activePage: AppPage;
@@ -16,6 +16,7 @@ interface NavbarProps {
 const PUBLIC_NAV_ITEMS: Array<{ id: AppPage; label: string }> = [
   { id: 'book', label: 'Book Trip' },
   { id: 'routes', label: 'Routes' },
+  { id: 'track', label: 'Live Track' },
   { id: 'tickets', label: 'My Tickets' },
   { id: 'parcel', label: 'Parcel' },
 ];

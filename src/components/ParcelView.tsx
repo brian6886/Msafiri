@@ -4,6 +4,7 @@ import React, { useMemo, useState } from 'react';
 import { KENYA_SACCOS, KENYA_TOWNS } from '../data/kenyaTransitData';
 import { createParcelWaybill } from '../services/firestoreService';
 import type { MpesaStkResponse, Parcel } from '../types';
+import { ParcelTracking } from './ParcelTracking';
 
 interface ParcelViewProps {
   user: User | null;
@@ -22,13 +23,14 @@ export const ParcelView: React.FC<ParcelViewProps> = ({
   const [destinationCity, setDestinationCity] = useState('Eldoret');
   const [saccoName, setSaccoName] = useState(KENYA_SACCOS[0].name);
   const [recipientName, setRecipientName] = useState('');
-  const [recipientPhone, setRecipientPhone] = useState('07');
-  const [senderPhone, setSenderPhone] = useState('07');
+  const [recipientPhone, setRecipientPhone] = useState('');
+  const [senderPhone, setSenderPhone] = useState('');
   const [description, setDescription] = useState('');
   const [weightKg, setWeightKg] = useState<number>(3);
   const [submitting, setSubmitting] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [successWaybill, setSuccessWaybill] = useState<string | null>(null);
+  const [trackedWaybill, setTrackedWaybill] = useState<string>('');
 
   const feeKes = useMemo(() => {
     const base = 300;
@@ -61,8 +63,8 @@ export const ParcelView: React.FC<ParcelViewProps> = ({
       if (!pushRes.ok) throw new Error(pushData.error || 'M-Pesa STK Push failed.');
 
       let receipt = '';
-      for (let i = 0; i < 30; i += 1) {
-        await new Promise((r) => setTimeout(r, 2000));
+      for (let i = 0; i < 15; i += 1) {
+        await new Promise((r) => setTimeout(r, 5000));
         const stRes = await fetch(`/api/mpesa/status/${pushData.checkoutRequestId}`);
         const stData = (await stRes.json()) as MpesaStkResponse;
         if (stData.status === 'COMPLETED' && stData.mpesaReceipt) {
@@ -76,7 +78,13 @@ export const ParcelView: React.FC<ParcelViewProps> = ({
         }
       }
 
-      if (!receipt) throw new Error('M-Pesa confirmation timed out before PIN entry.');
+      if (!receipt) {
+        throw new Error(
+          pushData.darajaMode === 'sandbox'
+            ? `Safaricom Daraja Sandbox accepted CheckoutRequestID ${pushData.checkoutRequestId}, but Sandbox (174379) does not send live SIM popups to real phones unless MPESA_ENV=production with Go-Live credentials.`
+            : 'M-Pesa confirmation timed out before PIN entry.'
+        );
+      }
 
       const parcelId = `pcl_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
       const parcelRecord: Omit<Parcel, 'createdAt'> = {
@@ -129,6 +137,8 @@ export const ParcelView: React.FC<ParcelViewProps> = ({
           Kenya, and Mombasa terminals.
         </p>
       </div>
+
+      <ParcelTracking parcels={parcels} initialWaybill={trackedWaybill} />
 
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
         {/* Left: Dispatch Form */}
@@ -349,7 +359,14 @@ export const ParcelView: React.FC<ParcelViewProps> = ({
                         <p className="text-[11px] font-mono text-slate-400">{p.mpesaReceipt}</p>
                       </td>
                       <td className="py-3 font-mono font-semibold text-slate-900 text-right">
-                        KES {p.feeKes.toLocaleString()}
+                        <div>KES {p.feeKes.toLocaleString()}</div>
+                        <button
+                          type="button"
+                          onClick={() => setTrackedWaybill(p.waybillNo)}
+                          className="text-[11px] font-sans font-semibold text-emerald-700 hover:underline mt-0.5"
+                        >
+                          Track Status
+                        </button>
                       </td>
                     </tr>
                   ))}
