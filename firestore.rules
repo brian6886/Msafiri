@@ -1,0 +1,320 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Global default-deny safety net
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Core identity and schema primitives
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isVerifiedUser() {
+      return isSignedIn() && request.auth.token.email_verified == true;
+    }
+
+    function isAdmin() {
+      return isVerifiedUser() && (
+        exists(/databases/$(database)/documents/admins/$(request.auth.uid)) ||
+        request.auth.token.email == 'khaneribrian@gmail.com'
+      );
+    }
+
+    function isValidUser(data) {
+      return data.keys().hasAll(['uid', 'displayName', 'email', 'role', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['uid', 'displayName', 'email', 'phone', 'preferredStage', 'role', 'createdAt', 'updatedAt'])
+        && isValidId(data.uid)
+        && data.displayName is string && data.displayName.size() >= 1 && data.displayName.size() <= 100
+        && data.email is string && data.email.size() >= 3 && data.email.size() <= 150
+        && (!('phone' in data) || (data.phone is string && data.phone.size() <= 15))
+        && (!('preferredStage' in data) || (data.preferredStage is string && data.preferredStage.size() <= 100))
+        && data.role in ['passenger', 'operator', 'admin']
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidAdminMember(data) {
+      return data.keys().hasAll(['uid', 'email', 'saccoScope', 'createdAt'])
+        && data.keys().hasOnly(['uid', 'email', 'saccoScope', 'createdAt'])
+        && isValidId(data.uid)
+        && data.email is string && data.email.size() >= 3 && data.email.size() <= 150
+        && data.saccoScope is string && data.saccoScope.size() >= 1 && data.saccoScope.size() <= 80
+        && data.createdAt is timestamp;
+    }
+
+    function isValidSacco(data) {
+      return data.keys().hasAll(['id', 'name', 'code', 'headquarters', 'ntsaLicense', 'mpesaPaybill', 'supportPhone', 'rating', 'fleetCount', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['id', 'name', 'code', 'headquarters', 'ntsaLicense', 'mpesaPaybill', 'supportPhone', 'rating', 'fleetCount', 'createdAt', 'updatedAt'])
+        && isValidId(data.id)
+        && data.name is string && data.name.size() >= 2 && data.name.size() <= 100
+        && data.code is string && data.code.size() >= 2 && data.code.size() <= 20
+        && data.headquarters is string && data.headquarters.size() >= 2 && data.headquarters.size() <= 100
+        && data.ntsaLicense is string && data.ntsaLicense.size() >= 4 && data.ntsaLicense.size() <= 40
+        && data.mpesaPaybill is string && data.mpesaPaybill.size() >= 4 && data.mpesaPaybill.size() <= 20
+        && data.supportPhone is string && data.supportPhone.size() >= 9 && data.supportPhone.size() <= 15
+        && data.rating is number && data.rating >= 1 && data.rating <= 5
+        && data.fleetCount is int && data.fleetCount >= 1 && data.fleetCount <= 5000
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidVehicle(data) {
+      return data.keys().hasAll(['id', 'saccoId', 'plateNumber', 'model', 'capacity', 'classTier', 'ntsaExpiry', 'speedGovernorStatus', 'driverName', 'status', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['id', 'saccoId', 'plateNumber', 'model', 'capacity', 'classTier', 'ntsaExpiry', 'speedGovernorStatus', 'driverName', 'status', 'createdAt', 'updatedAt'])
+        && isValidId(data.id)
+        && isValidId(data.saccoId)
+        && data.plateNumber is string && data.plateNumber.size() >= 6 && data.plateNumber.size() <= 12
+        && data.model is string && data.model.size() >= 2 && data.model.size() <= 80
+        && data.capacity is int && data.capacity >= 7 && data.capacity <= 65
+        && data.classTier in ['Executive 11', 'Standard 14', 'VIP Coach 33']
+        && data.ntsaExpiry is string && data.ntsaExpiry.size() >= 8 && data.ntsaExpiry.size() <= 24
+        && data.speedGovernorStatus in ['Calibrated 80km/h', 'Inspection Due', 'Suspended']
+        && data.driverName is string && data.driverName.size() >= 2 && data.driverName.size() <= 80
+        && data.status in ['Active', 'Maintenance', 'Grounded']
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidTrip(data) {
+      return data.keys().hasAll(['id', 'saccoId', 'saccoName', 'vehicleId', 'plateNumber', 'classTier', 'origin', 'originStage', 'destination', 'destinationStage', 'departureDate', 'departureTime', 'arrivalTime', 'durationLabel', 'fareKes', 'capacity', 'availableSeats', 'bookedSeats', 'status', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['id', 'saccoId', 'saccoName', 'vehicleId', 'plateNumber', 'classTier', 'origin', 'originStage', 'destination', 'destinationStage', 'departureDate', 'departureTime', 'arrivalTime', 'durationLabel', 'fareKes', 'capacity', 'availableSeats', 'bookedSeats', 'status', 'createdAt', 'updatedAt'])
+        && isValidId(data.id)
+        && isValidId(data.saccoId)
+        && data.saccoName is string && data.saccoName.size() >= 2 && data.saccoName.size() <= 100
+        && isValidId(data.vehicleId)
+        && data.plateNumber is string && data.plateNumber.size() >= 6 && data.plateNumber.size() <= 12
+        && data.classTier in ['Executive 11', 'Standard 14', 'VIP Coach 33']
+        && data.origin is string && data.origin.size() >= 2 && data.origin.size() <= 60
+        && data.originStage is string && data.originStage.size() >= 2 && data.originStage.size() <= 100
+        && data.destination is string && data.destination.size() >= 2 && data.destination.size() <= 60
+        && data.destinationStage is string && data.destinationStage.size() >= 2 && data.destinationStage.size() <= 100
+        && data.departureDate is string && data.departureDate.size() >= 10 && data.departureDate.size() <= 16
+        && data.departureTime is string && data.departureTime.size() >= 4 && data.departureTime.size() <= 10
+        && data.arrivalTime is string && data.arrivalTime.size() >= 4 && data.arrivalTime.size() <= 10
+        && data.durationLabel is string && data.durationLabel.size() >= 2 && data.durationLabel.size() <= 24
+        && data.fareKes is int && data.fareKes >= 50 && data.fareKes <= 25000
+        && data.capacity is int && data.capacity >= 7 && data.capacity <= 65
+        && data.availableSeats is int && data.availableSeats >= 0 && data.availableSeats <= data.capacity
+        && data.bookedSeats is list && data.bookedSeats.size() <= 49
+        && (data.bookedSeats.size() == 0 || data.bookedSeats[0] is string)
+        && data.status in ['Scheduled', 'Boarding', 'Departed', 'Arrived', 'Cancelled']
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidBooking(data) {
+      return data.keys().hasAll(['id', 'ticketRef', 'tripId', 'passengerUid', 'passengerName', 'passengerPhone', 'pickupStage', 'dropoffStage', 'saccoName', 'plateNumber', 'routeLabel', 'departureDate', 'departureTime', 'seats', 'totalKes', 'mpesaReceipt', 'checkoutRequestId', 'paymentStatus', 'status', 'qrSignature', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['id', 'ticketRef', 'tripId', 'passengerUid', 'passengerName', 'passengerPhone', 'pickupStage', 'dropoffStage', 'saccoName', 'plateNumber', 'routeLabel', 'departureDate', 'departureTime', 'seats', 'totalKes', 'mpesaReceipt', 'checkoutRequestId', 'paymentStatus', 'status', 'qrSignature', 'createdAt', 'updatedAt'])
+        && isValidId(data.id)
+        && data.ticketRef is string && data.ticketRef.size() >= 6 && data.ticketRef.size() <= 24
+        && isValidId(data.tripId)
+        && isValidId(data.passengerUid)
+        && data.passengerName is string && data.passengerName.size() >= 2 && data.passengerName.size() <= 100
+        && data.passengerPhone is string && data.passengerPhone.size() >= 9 && data.passengerPhone.size() <= 16
+        && data.pickupStage is string && data.pickupStage.size() >= 2 && data.pickupStage.size() <= 100
+        && data.dropoffStage is string && data.dropoffStage.size() >= 2 && data.dropoffStage.size() <= 100
+        && data.saccoName is string && data.saccoName.size() >= 2 && data.saccoName.size() <= 100
+        && data.plateNumber is string && data.plateNumber.size() >= 6 && data.plateNumber.size() <= 12
+        && data.routeLabel is string && data.routeLabel.size() >= 4 && data.routeLabel.size() <= 120
+        && data.departureDate is string && data.departureDate.size() >= 10 && data.departureDate.size() <= 16
+        && data.departureTime is string && data.departureTime.size() >= 4 && data.departureTime.size() <= 10
+        && data.seats is list && data.seats.size() >= 1 && data.seats.size() <= 14
+        && data.seats[0] is string
+        && data.totalKes is int && data.totalKes >= 50 && data.totalKes <= 150000
+        && data.mpesaReceipt is string && data.mpesaReceipt.size() <= 32
+        && data.checkoutRequestId is string && data.checkoutRequestId.size() <= 80
+        && data.paymentStatus in ['Pending', 'Paid', 'Failed', 'Refunded']
+        && data.status in ['PendingPayment', 'Confirmed', 'Boarded', 'Cancelled']
+        && data.qrSignature is string && data.qrSignature.size() >= 8 && data.qrSignature.size() <= 160
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidParcel(data) {
+      return data.keys().hasAll(['id', 'waybillNo', 'senderUid', 'senderName', 'senderPhone', 'recipientName', 'recipientPhone', 'originCity', 'destinationCity', 'saccoName', 'description', 'weightKg', 'feeKes', 'mpesaReceipt', 'status', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['id', 'waybillNo', 'senderUid', 'senderName', 'senderPhone', 'recipientName', 'recipientPhone', 'originCity', 'destinationCity', 'saccoName', 'description', 'weightKg', 'feeKes', 'mpesaReceipt', 'status', 'createdAt', 'updatedAt'])
+        && isValidId(data.id)
+        && data.waybillNo is string && data.waybillNo.size() >= 6 && data.waybillNo.size() <= 24
+        && isValidId(data.senderUid)
+        && data.senderName is string && data.senderName.size() >= 2 && data.senderName.size() <= 100
+        && data.senderPhone is string && data.senderPhone.size() >= 9 && data.senderPhone.size() <= 16
+        && data.recipientName is string && data.recipientName.size() >= 2 && data.recipientName.size() <= 100
+        && data.recipientPhone is string && data.recipientPhone.size() >= 9 && data.recipientPhone.size() <= 16
+        && data.originCity is string && data.originCity.size() >= 2 && data.originCity.size() <= 60
+        && data.destinationCity is string && data.destinationCity.size() >= 2 && data.destinationCity.size() <= 60
+        && data.saccoName is string && data.saccoName.size() >= 2 && data.saccoName.size() <= 100
+        && data.description is string && data.description.size() >= 2 && data.description.size() <= 200
+        && data.weightKg is number && data.weightKg > 0 && data.weightKg <= 500
+        && data.feeKes is int && data.feeKes >= 100 && data.feeKes <= 100000
+        && data.mpesaReceipt is string && data.mpesaReceipt.size() <= 32
+        && data.status in ['Booked', 'In Transit', 'Ready for Pickup', 'Collected', 'Cancelled']
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    // Users collection: Private PII strictly restricted to owner or admin
+    match /users/{userId} {
+      allow get: if isValidId(userId) && isSignedIn() && (request.auth.uid == userId || isAdmin());
+      allow list: if isSignedIn() && (resource.data.uid == request.auth.uid || isAdmin());
+      allow create: if isValidId(userId)
+        && isVerifiedUser()
+        && isValidUser(incoming())
+        && request.auth.uid == userId
+        && incoming().uid == request.auth.uid
+        && incoming().role == 'passenger'
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+      allow update: if isValidId(userId)
+        && isVerifiedUser()
+        && isValidUser(incoming())
+        && incoming().uid == existing().uid
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && (
+          isAdmin() ||
+          (
+            request.auth.uid == userId
+            && incoming().role == existing().role
+            && incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'phone', 'preferredStage', 'updatedAt'])
+          )
+        );
+      allow delete: if isValidId(userId) && isAdmin();
+    }
+
+    // Admins collection
+    match /admins/{userId} {
+      allow get: if isValidId(userId) && isSignedIn() && (request.auth.uid == userId || isAdmin());
+      allow list: if isAdmin();
+      allow create: if isValidId(userId) && isAdmin() && isValidAdminMember(incoming()) && incoming().createdAt == request.time;
+      allow update: if false;
+      allow delete: if isValidId(userId) && isAdmin();
+    }
+
+    // Kenyan Matatu SACCOs
+    match /saccos/{saccoId} {
+      allow get: if isValidId(saccoId);
+      allow list: if true;
+      allow create: if isValidId(saccoId) && isAdmin() && isValidSacco(incoming()) && incoming().id == saccoId && incoming().createdAt == request.time && incoming().updatedAt == request.time;
+      allow update: if isValidId(saccoId) && isAdmin() && isValidSacco(incoming()) && incoming().id == existing().id && incoming().createdAt == existing().createdAt && incoming().updatedAt == request.time;
+      allow delete: if isValidId(saccoId) && isAdmin();
+    }
+
+    // PSV Vehicles Registry
+    match /vehicles/{vehicleId} {
+      allow get: if isValidId(vehicleId);
+      allow list: if true;
+      allow create: if isValidId(vehicleId) && isAdmin() && isValidVehicle(incoming()) && incoming().id == vehicleId && exists(/databases/$(database)/documents/saccos/$(incoming().saccoId)) && incoming().createdAt == request.time && incoming().updatedAt == request.time;
+      allow update: if isValidId(vehicleId) && isAdmin() && isValidVehicle(incoming()) && incoming().id == existing().id && incoming().createdAt == existing().createdAt && incoming().updatedAt == request.time;
+      allow delete: if isValidId(vehicleId) && isAdmin();
+    }
+
+    // Scheduled Matatu Trips & Seat Inventory
+    match /trips/{tripId} {
+      allow get: if isValidId(tripId);
+      allow list: if true;
+      allow create: if isValidId(tripId)
+        && isAdmin()
+        && isValidTrip(incoming())
+        && incoming().id == tripId
+        && exists(/databases/$(database)/documents/saccos/$(incoming().saccoId))
+        && exists(/databases/$(database)/documents/vehicles/$(incoming().vehicleId))
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+      allow update: if isValidId(tripId)
+        && isVerifiedUser()
+        && isValidTrip(incoming())
+        && incoming().id == existing().id
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && (
+          isAdmin() ||
+          (
+            existing().status in ['Scheduled', 'Boarding']
+            && incoming().diff(existing()).affectedKeys().hasOnly(['bookedSeats', 'availableSeats', 'updatedAt'])
+            && incoming().bookedSeats.size() > existing().bookedSeats.size()
+            && incoming().bookedSeats.hasAll(existing().bookedSeats)
+            && incoming().availableSeats == existing().availableSeats - (incoming().bookedSeats.size() - existing().bookedSeats.size())
+            && incoming().availableSeats >= 0
+          )
+        );
+      allow delete: if isValidId(tripId) && isAdmin();
+    }
+
+    // Passenger Bookings & Digital Tickets
+    match /bookings/{bookingId} {
+      allow get: if isValidId(bookingId) && isSignedIn() && (existing().passengerUid == request.auth.uid || isAdmin());
+      allow list: if isSignedIn() && (resource.data.passengerUid == request.auth.uid || isAdmin());
+      allow create: if isValidId(bookingId)
+        && isVerifiedUser()
+        && isValidBooking(incoming())
+        && incoming().id == bookingId
+        && incoming().passengerUid == request.auth.uid
+        && exists(/databases/$(database)/documents/trips/$(incoming().tripId))
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+      allow update: if isValidId(bookingId)
+        && isVerifiedUser()
+        && isValidBooking(incoming())
+        && incoming().id == existing().id
+        && incoming().tripId == existing().tripId
+        && incoming().passengerUid == existing().passengerUid
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && (
+          isAdmin() ||
+          (
+            existing().passengerUid == request.auth.uid
+            && existing().status in ['PendingPayment', 'Confirmed']
+            && incoming().status in ['Confirmed', 'Cancelled']
+            && incoming().diff(existing()).affectedKeys().hasOnly(['mpesaReceipt', 'paymentStatus', 'status', 'qrSignature', 'updatedAt'])
+          )
+        );
+      allow delete: if isValidId(bookingId) && isAdmin();
+    }
+
+    // SACCO Parcel & Courier Waybills
+    match /parcels/{parcelId} {
+      allow get: if isValidId(parcelId) && isSignedIn() && (existing().senderUid == request.auth.uid || isAdmin());
+      allow list: if isSignedIn() && (resource.data.senderUid == request.auth.uid || isAdmin());
+      allow create: if isValidId(parcelId)
+        && isVerifiedUser()
+        && isValidParcel(incoming())
+        && incoming().id == parcelId
+        && incoming().senderUid == request.auth.uid
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+      allow update: if isValidId(parcelId)
+        && isVerifiedUser()
+        && isValidParcel(incoming())
+        && incoming().id == existing().id
+        && incoming().senderUid == existing().senderUid
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && (
+          isAdmin() ||
+          (
+            existing().senderUid == request.auth.uid
+            && existing().status == 'Booked'
+            && incoming().status in ['Booked', 'Cancelled']
+            && incoming().diff(existing()).affectedKeys().hasOnly(['mpesaReceipt', 'status', 'updatedAt'])
+          )
+        );
+      allow delete: if isValidId(parcelId) && isAdmin();
+    }
+  }
+}

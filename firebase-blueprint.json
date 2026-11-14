@@ -1,0 +1,185 @@
+{
+  "entities": {
+    "UserProfile": {
+      "title": "UserProfile",
+      "description": "Authenticated passenger or operator profile stored privately per user.",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "displayName": { "type": "string", "minLength": 1, "maxLength": 100 },
+        "email": { "type": "string", "minLength": 3, "maxLength": 150 },
+        "phone": { "type": "string", "minLength": 9, "maxLength": 15 },
+        "preferredStage": { "type": "string", "minLength": 0, "maxLength": 100 },
+        "role": { "type": "string", "enum": ["passenger", "operator", "admin"] },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["uid", "displayName", "email", "role", "createdAt", "updatedAt"]
+    },
+    "AdminMember": {
+      "title": "AdminMember",
+      "description": "Trusted administrator and SACCO operations registry entry.",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "email": { "type": "string", "minLength": 3, "maxLength": 150 },
+        "saccoScope": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["uid", "email", "saccoScope", "createdAt"]
+    },
+    "Sacco": {
+      "title": "Sacco",
+      "description": "Licensed Kenyan Matatu SACCO operator.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 64, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "name": { "type": "string", "minLength": 2, "maxLength": 100 },
+        "code": { "type": "string", "minLength": 2, "maxLength": 20 },
+        "headquarters": { "type": "string", "minLength": 2, "maxLength": 100 },
+        "ntsaLicense": { "type": "string", "minLength": 4, "maxLength": 40 },
+        "mpesaPaybill": { "type": "string", "minLength": 4, "maxLength": 20 },
+        "supportPhone": { "type": "string", "minLength": 9, "maxLength": 15 },
+        "rating": { "type": "number" },
+        "fleetCount": { "type": "integer" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "name", "code", "headquarters", "ntsaLicense", "mpesaPaybill", "supportPhone", "rating", "fleetCount", "createdAt", "updatedAt"]
+    },
+    "Vehicle": {
+      "title": "Vehicle",
+      "description": "NTSA-compliant Kenyan PSV matatu or executive coach.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 64, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "saccoId": { "type": "string", "minLength": 1, "maxLength": 64, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "plateNumber": { "type": "string", "minLength": 6, "maxLength": 12 },
+        "model": { "type": "string", "minLength": 2, "maxLength": 80 },
+        "capacity": { "type": "integer" },
+        "classTier": { "type": "string", "enum": ["Executive 11", "Standard 14", "VIP Coach 33"] },
+        "ntsaExpiry": { "type": "string", "minLength": 8, "maxLength": 24 },
+        "speedGovernorStatus": { "type": "string", "enum": ["Calibrated 80km/h", "Inspection Due", "Suspended"] },
+        "driverName": { "type": "string", "minLength": 2, "maxLength": 80 },
+        "status": { "type": "string", "enum": ["Active", "Maintenance", "Grounded"] },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "saccoId", "plateNumber", "model", "capacity", "classTier", "ntsaExpiry", "speedGovernorStatus", "driverName", "status", "createdAt", "updatedAt"]
+    },
+    "Trip": {
+      "title": "Trip",
+      "description": "Scheduled matatu departure along a Kenyan corridor.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 64, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "saccoId": { "type": "string", "minLength": 1, "maxLength": 64, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "saccoName": { "type": "string", "minLength": 2, "maxLength": 100 },
+        "vehicleId": { "type": "string", "minLength": 1, "maxLength": 64, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "plateNumber": { "type": "string", "minLength": 6, "maxLength": 12 },
+        "classTier": { "type": "string", "enum": ["Executive 11", "Standard 14", "VIP Coach 33"] },
+        "origin": { "type": "string", "minLength": 2, "maxLength": 60 },
+        "originStage": { "type": "string", "minLength": 2, "maxLength": 100 },
+        "destination": { "type": "string", "minLength": 2, "maxLength": 60 },
+        "destinationStage": { "type": "string", "minLength": 2, "maxLength": 100 },
+        "departureDate": { "type": "string", "minLength": 10, "maxLength": 16 },
+        "departureTime": { "type": "string", "minLength": 4, "maxLength": 10 },
+        "arrivalTime": { "type": "string", "minLength": 4, "maxLength": 10 },
+        "durationLabel": { "type": "string", "minLength": 2, "maxLength": 24 },
+        "fareKes": { "type": "integer" },
+        "capacity": { "type": "integer" },
+        "availableSeats": { "type": "integer" },
+        "bookedSeats": { "type": "array" },
+        "status": { "type": "string", "enum": ["Scheduled", "Boarding", "Departed", "Arrived", "Cancelled"] },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "saccoId", "saccoName", "vehicleId", "plateNumber", "classTier", "origin", "originStage", "destination", "destinationStage", "departureDate", "departureTime", "arrivalTime", "durationLabel", "fareKes", "capacity", "availableSeats", "bookedSeats", "status", "createdAt", "updatedAt"]
+    },
+    "Booking": {
+      "title": "Booking",
+      "description": "Passenger seat reservation and M-Pesa digital ticket.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 64, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "ticketRef": { "type": "string", "minLength": 6, "maxLength": 24 },
+        "tripId": { "type": "string", "minLength": 1, "maxLength": 64, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "passengerUid": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "passengerName": { "type": "string", "minLength": 2, "maxLength": 100 },
+        "passengerPhone": { "type": "string", "minLength": 9, "maxLength": 16 },
+        "pickupStage": { "type": "string", "minLength": 2, "maxLength": 100 },
+        "dropoffStage": { "type": "string", "minLength": 2, "maxLength": 100 },
+        "saccoName": { "type": "string", "minLength": 2, "maxLength": 100 },
+        "plateNumber": { "type": "string", "minLength": 6, "maxLength": 12 },
+        "routeLabel": { "type": "string", "minLength": 4, "maxLength": 120 },
+        "departureDate": { "type": "string", "minLength": 10, "maxLength": 16 },
+        "departureTime": { "type": "string", "minLength": 4, "maxLength": 10 },
+        "seats": { "type": "array" },
+        "totalKes": { "type": "integer" },
+        "mpesaReceipt": { "type": "string", "minLength": 0, "maxLength": 32 },
+        "checkoutRequestId": { "type": "string", "minLength": 0, "maxLength": 80 },
+        "paymentStatus": { "type": "string", "enum": ["Pending", "Paid", "Failed", "Refunded"] },
+        "status": { "type": "string", "enum": ["PendingPayment", "Confirmed", "Boarded", "Cancelled"] },
+        "qrSignature": { "type": "string", "minLength": 8, "maxLength": 160 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "ticketRef", "tripId", "passengerUid", "passengerName", "passengerPhone", "pickupStage", "dropoffStage", "saccoName", "plateNumber", "routeLabel", "departureDate", "departureTime", "seats", "totalKes", "mpesaReceipt", "checkoutRequestId", "paymentStatus", "status", "qrSignature", "createdAt", "updatedAt"]
+    },
+    "Parcel": {
+      "title": "Parcel",
+      "description": "SACCO intercity parcel courier waybill.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 64, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "waybillNo": { "type": "string", "minLength": 6, "maxLength": 24 },
+        "senderUid": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "senderName": { "type": "string", "minLength": 2, "maxLength": 100 },
+        "senderPhone": { "type": "string", "minLength": 9, "maxLength": 16 },
+        "recipientName": { "type": "string", "minLength": 2, "maxLength": 100 },
+        "recipientPhone": { "type": "string", "minLength": 9, "maxLength": 16 },
+        "originCity": { "type": "string", "minLength": 2, "maxLength": 60 },
+        "destinationCity": { "type": "string", "minLength": 2, "maxLength": 60 },
+        "saccoName": { "type": "string", "minLength": 2, "maxLength": 100 },
+        "description": { "type": "string", "minLength": 2, "maxLength": 200 },
+        "weightKg": { "type": "number" },
+        "feeKes": { "type": "integer" },
+        "mpesaReceipt": { "type": "string", "minLength": 0, "maxLength": 32 },
+        "status": { "type": "string", "enum": ["Booked", "In Transit", "Ready for Pickup", "Collected", "Cancelled"] },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "waybillNo", "senderUid", "senderName", "senderPhone", "recipientName", "recipientPhone", "originCity", "destinationCity", "saccoName", "description", "weightKg", "feeKes", "mpesaReceipt", "status", "createdAt", "updatedAt"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": { "$ref": "#/entities/UserProfile" },
+      "description": "Private user profile and contact phone for M-Pesa STK Push."
+    },
+    "/admins/{userId}": {
+      "schema": { "$ref": "#/entities/AdminMember" },
+      "description": "Verified SACCO operations administrators."
+    },
+    "/saccos/{saccoId}": {
+      "schema": { "$ref": "#/entities/Sacco" },
+      "description": "Registered Kenyan Matatu SACCO operators."
+    },
+    "/vehicles/{vehicleId}": {
+      "schema": { "$ref": "#/entities/Vehicle" },
+      "description": "NTSA-verified PSV vehicles assigned to SACCOs."
+    },
+    "/trips/{tripId}": {
+      "schema": { "$ref": "#/entities/Trip" },
+      "description": "Live intercity and expressway matatu departure schedules with seat inventory."
+    },
+    "/bookings/{bookingId}": {
+      "schema": { "$ref": "#/entities/Booking" },
+      "description": "Passenger seat reservations and verified M-Pesa boarding passes."
+    },
+    "/parcels/{parcelId}": {
+      "schema": { "$ref": "#/entities/Parcel" },
+      "description": "SACCO intercity parcel waybills and courier tracking."
+    }
+  }
+}

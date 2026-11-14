@@ -1,0 +1,6 @@
+{
+  "name": "Msafiri — Kenya Matatu & Intercity Booking",
+  "description": "Operational Kenyan matatu and executive shuttle booking system with live seat maps, M-Pesa STK Push checkout, QR boarding passes, SACCO parcel courier, and fleet operations.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
